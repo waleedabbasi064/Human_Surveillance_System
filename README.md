@@ -141,8 +141,8 @@ The pipeline was trained and evaluated on the IITB-Corridor Dataset. The SPARTA 
 
 Put your Google Drive or external download links here:
 
-- `Detection + pose model weights`: `<YOUR_DETECTION_AND_POSE_WEIGHTS_DRIVE_LINK>`
-- `SPARTA checkpoint weights`: `<YOUR_SPARTA_CHECKPOINTS_DRIVE_LINK>`
+- `Detection + pose model weights`: Download it from its official github repo
+- `SPARTA checkpoint weights`: `https://drive.google.com/drive/folders/18cSRaZDx2tOw98gexUdBHAaFJLAh8hwV?usp=sharing`
 
 > Note: Do not commit these large weight files to GitHub. Keep only code and configuration in the repo.
 
