@@ -1,0 +1,60 @@
+# Base configuration for SPARTA variants
+# Edit this file, then run: python main.py
+
+dataset: corridor
+branch: SPARTA_F # SPARTA_C | SPARTA_F | SPARTA_H
+mode: test # train | test
+
+device: cuda:0
+seed: 999
+
+# Custom paths (outside ./data)
+data_dir: .
+vid_path_train: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/videos/surveillance video.mp4
+pose_path_train: null
+pose_path_train_abnormal: null
+vid_path_test: null
+pose_path_test: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/pose_outputs/01_0000.json
+mask_root: null
+
+model_save_dir: results/sparta-f
+model_ckpt_dir: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/FTD.pth.tar # required in test mode (non-H)
+model_ckpt_C: null # required in test mode for SPARTA_H
+model_ckpt_F: null # required in test mode for SPARTA_H
+
+seg_len: 24
+seg_stride: 12
+num_kp: 18
+batch_size: 256
+epochs: 50
+
+model_optimizer: adam
+model_lr: 5.0e-10
+model_weight_decay: 5.0e-5
+model_lr_decay: 0.99
+sched: tri
+model_loss: mse # mse | emd | spec | ssim | cos | CHAD
+model_a: 1.0
+model_b: 1.0
+model_c: 1.0
+model_d: 1.0
+
+token_config: t # t | pst | kps | 2ds | st
+relative: true
+traj: false
+dropout: 0.3
+
+eval_interval: 0
+disable_eval_during_train: false
+skip_final_eval: false
+save_results: true
+save_results_dir: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/pose_outputs
+plot_results: true
+plot_results_dir: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/pose_outputs/evaluation_plots_sparta-f
+metrics_csv: metrics.csv
+model_num_heads: 2
+model_latent_dim: 64
+no_metrics: true
+eer_threshold_c: 0.25
+eer_threshold_f: 0.4
+eer_threshold_h: 0.4
