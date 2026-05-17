@@ -28,10 +28,11 @@ MANIFEST
 
 # --- Project Specific Folders ---
 mmpose/
-Preprocessedd-data/
+preprocess_data/
+pose_outputs/
 Trained_Models/
 data/
-pose_outputs/
+model_performance/
 evaluation_results*/
 results-sparta*/
 videos*/

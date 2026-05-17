@@ -29,6 +29,9 @@ def load_base_cfg() -> Dict:
 BASE_CFG = load_base_cfg()
 POSE_WEIGHTS = BASE_CFG["models"]["pose"]["weights"]
 DET_WEIGHTS = BASE_CFG["models"]["detection"].get("weights", {})
+SPARTA_CFG = BASE_CFG.get("models", {}).get("sparta", {})
+SPARTA_CHECKPOINTS = SPARTA_CFG.get("checkpoints", {})
+SPARTA_PRESETS = SPARTA_CFG.get("presets", {})
 
 def variants_for(family: str) -> Tuple[str, ...]:
     block = POSE_WEIGHTS.get(family, {})
@@ -103,10 +106,33 @@ def build_run_config(
     return cfg
 
 
-def build_sparta_config(base_cfg: Dict, sparta_branch: str, ckpt_c: str, ckpt_f: str, pose_json_dir: Path, device: str) -> Dict:
-    ckpt_block = base_cfg.get("models", {}).get("sparta", {}).get("checkpoints", {})
-    th_c = ckpt_block.get("eer_threshold_c")
-    th_f = ckpt_block.get("eer_threshold_f")
+def resolve_sparta_defaults(selected_preset: str, sparta_branch: str) -> Tuple[str, str, float | None, float | None]:
+    ckpt_block = SPARTA_CHECKPOINTS
+    preset_block = SPARTA_PRESETS.get(selected_preset, {}) if selected_preset != "Active config" else {}
+
+    default_ctd = preset_block.get("ctd", ckpt_block.get("sparta_c", ""))
+    default_ftd = preset_block.get("ftd", ckpt_block.get("sparta_f", ""))
+    threshold_c = preset_block.get("eer_threshold_c", ckpt_block.get("eer_threshold_c"))
+    threshold_f = preset_block.get("eer_threshold_f", ckpt_block.get("eer_threshold_f"))
+
+    if sparta_branch == "SPARTA_H":
+        return default_ctd, default_ftd, threshold_c, threshold_f
+    if sparta_branch == "SPARTA_F":
+        return default_ftd, "", threshold_c, threshold_f
+    return default_ctd, "", threshold_c, threshold_f
+
+
+def build_sparta_config(
+    base_cfg: Dict,
+    sparta_branch: str,
+    ckpt_c: str,
+    ckpt_f: str,
+    th_c: float | None,
+    th_f: float | None,
+    pose_json_dir: Path,
+    device: str,
+    selected_preset: str,
+) -> Dict:
     sparta_cfg = {
         "mode": "test",
         "no_metrics": True,
@@ -126,6 +152,7 @@ def build_sparta_config(base_cfg: Dict, sparta_branch: str, ckpt_c: str, ckpt_f:
         "batch_size": base_cfg.get("batch_size", 256) if isinstance(base_cfg.get("batch_size", 256), int) else 256,
         "device": device if device != "auto" else base_cfg.get("models", {}).get("pose", {}).get("device", "cpu"),
         "dataset": base_cfg.get("dataset", "corridor"),
+        "weight_preset": selected_preset,
     }
     friendly_branch_map = {
         "Reconstruction Model": "SPARTA_C",
@@ -318,13 +345,16 @@ def main():
             "Hybrid": "SPARTA_H",
         }
         sparta_branch = sparta_branch_map.get(sparta_branch_display, sparta_branch_display)
-        ckpt_defaults = BASE_CFG.get("models", {}).get("sparta", {}).get("checkpoints", {})
+        sparta_preset_options = ["Active config"] + list(SPARTA_PRESETS.keys())
+        selected_sparta_preset = st.selectbox("Weights Dataset", sparta_preset_options, index=0)
+        ckpt_c_default, ckpt_f_default, th_c_default, th_f_default = resolve_sparta_defaults(selected_sparta_preset, sparta_branch)
+        if selected_sparta_preset != "Active config":
+            st.caption(f"Using preset from `models.sparta.presets.{selected_sparta_preset}`")
         if sparta_branch == "SPARTA_H":
-            ckpt_c = st.text_input("Checkpoint (C)", ckpt_defaults.get("sparta_h_c", ""))
-            ckpt_f = st.text_input("Checkpoint (F)", ckpt_defaults.get("sparta_h_f", ""))
+            ckpt_c = st.text_input("Checkpoint (C)", ckpt_c_default)
+            ckpt_f = st.text_input("Checkpoint (F)", ckpt_f_default)
         else:
-            default_ckpt = ckpt_defaults.get("sparta_c" if sparta_branch == "SPARTA_C" else "sparta_f", "")
-            ckpt_c = st.text_input("Checkpoint", default_ckpt)
+            ckpt_c = st.text_input("Checkpoint", ckpt_c_default)
             ckpt_f = ""
     
     # --- MAIN: Title and Upload ---
@@ -396,7 +426,17 @@ def main():
                 st.subheader("⚡ Anomaly Scores")
                 
                 if final_json_path and final_json_path.exists():
-                    sparta_cfg = build_sparta_config(BASE_CFG, sparta_branch, ckpt_c, ckpt_f, final_json_path.parent, device)
+                    sparta_cfg = build_sparta_config(
+                        BASE_CFG,
+                        sparta_branch,
+                        ckpt_c,
+                        ckpt_f,
+                        th_c_default,
+                        th_f_default,
+                        final_json_path.parent,
+                        device,
+                        selected_sparta_preset,
+                    )
                     
                     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=BASE_DIR, delete=False) as tmp_sparta:
                         yaml.safe_dump(sparta_cfg, tmp_sparta)

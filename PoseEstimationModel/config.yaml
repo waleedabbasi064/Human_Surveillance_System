@@ -4,7 +4,7 @@ models:
         variant: "n"
         confidence_threshold: 0.30
         iou_threshold: 0.45
-        device: "cpu"
+        device: "cuda" # change to "cuda" if needed
         classes:
         weights:
             yolo:
@@ -13,7 +13,6 @@ models:
                 m: "yolov8m.pt"
                 l: "yolov8l.pt"
                 x: "yolov8x.pt"
-        # Moved tracking out of weights to match the PersonDetector class logic
         tracking:
             track_high_thresh: 0.30
             track_low_thresh: 0.15
@@ -23,23 +22,46 @@ models:
             min_box_area: 10
             mot20: false
 
-    # FIXED: This must be at the same indentation level as 'detection'
     sparta:
-        branch: "SPARTA_C" # SPARTA_C | SPARTA_F | SPARTA_H (UI will override)
-        relative: true # must match the checkpoint training config
+        branch: "SPARTA_C" # SPARTA_C | SPARTA_F | SPARTA_H
+        relative: true
         token_config: "t"
         num_kp: 18
         seg_len: 24
         model_num_heads: 2
         model_latent_dim: 64
         dropout: 0.3
+
+        # ACTIVE CHECKPOINTS
+        # Set these to whichever dataset you want to use right now.
         checkpoints:
-            sparta_c: "results-sparta-c/checkpoint_best.pth.tar"
+            sparta_c: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/CTD.pth.tar"
             eer_threshold_c: 0.03000000000000001
-            sparta_f: "results-sparta-f/checkpoint_best.pth.tar"
+            sparta_f: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/FTD.pth.tar"
             eer_threshold_f: 0.0644547895546187
-            sparta_h_c: "results-sparta-c/checkpoint_best.pth.tar"
-            sparta_h_f: "results-sparta-f/checkpoint_best.pth.tar"
+            sparta_h_c: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/CTD.pth.tar"
+            sparta_h_f: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/FTD.pth.tar"
+
+        # PRESET STORAGE ONLY
+        # Current pipeline does not switch these automatically unless UI code maps them.
+        presets:
+            CHAD:
+                ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/CTD.pth.tar"
+                ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/FTD.pth.tar"
+                eer_threshold_c: 0.03000000000000001
+                eer_threshold_f: 0.0644547895546187
+
+            NWPUC:
+                ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/NWPUC/CTD.pth.tar"
+                ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/NWPUC/FTD.pth.tar"
+                eer_threshold_c: 0.03000000000000001
+                eer_threshold_f: 0.0644547895546187
+
+            SHT:
+                ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/SHT/CTD.pth.tar"
+                ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/SHT/FTD.pth.tar"
+                eer_threshold_c: 0.03000000000000001
+                eer_threshold_f: 0.0644547895546187
 
     pose:
         name: "vitpose"
@@ -47,7 +69,7 @@ models:
         confidence_threshold: 0.25
         iou_threshold: 0.45
         min_keypoint_confidence: 0.30
-        device: "cpu"
+        device: "cuda" # change to "cuda" if needed
         fourcc: "XVID"
         save_video: true
         weights:
@@ -65,7 +87,6 @@ models:
                 l:
                     config: "../mmpose/configs/body_2d_keypoint/rtmpose/coco/rtmpose-l_8xb256-420e_coco-256x192.py"
                     checkpoint: "./rtmpose-l_simcc-coco_pt-aic-coco_420e-256x192-1352a4d2_20230127.pth"
-
             yolo-pose:
                 x: "./yolo26x-pose.pt"
                 l: "./yolo26l-pose.pt"
@@ -74,13 +95,13 @@ models:
                 n: "./yolo26n-pose.pt"
 
 paths:
-    input_video: "../videos"
+    input_video: "../videos/surveillance video.mp4"
     pose_output_dir: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/pose_outputs"
     sparta_output_dir: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/evaluation_results_sparta"
     static_prefix: "01_"
     pose_json_suffix: ".json"
 
 inference:
-    no_metrics: save # don’t require masks
+    no_metrics: save
     save_results: save
     save_results_dir: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/evaluation_results_sparta"
