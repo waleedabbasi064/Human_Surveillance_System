@@ -23,7 +23,7 @@ models:
             mot20: false
 
     sparta:
-        branch: "SPARTA_C" # SPARTA_C | SPARTA_F | SPARTA_H
+        branch: "CHAD" # SPARTA_C | SPARTA_F | SPARTA_H
         relative: true
         token_config: "t"
         num_kp: 18
@@ -34,34 +34,29 @@ models:
 
         # ACTIVE CHECKPOINTS
         # Set these to whichever dataset you want to use right now.
-        checkpoints:
-            sparta_c: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/results-sparta-c/checkpoint_best.pth.tar"
+        IITB:
+            ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/results-sparta-c/checkpoint_best.pth.tar"
+            ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/results-sparta-f/checkpoint_best.pth.tar"
             eer_threshold_c: 0.03000000000000001
-            sparta_f: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/results-sparta-f/checkpoint_best.pth.tar"
             eer_threshold_f: 0.0644547895546187
-            sparta_h_c: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/results-sparta-c/checkpoint_best.pth.tar"
-            sparta_h_f: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/results-sparta-f/checkpoint_best.pth.tar"
 
-        # PRESET STORAGE ONLY
-        # Current pipeline does not switch these automatically unless UI code maps them.
-        presets:
-            CHAD:
-                ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/CTD.pth.tar"
-                ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/FTD.pth.tar"
-                eer_threshold_c: 0.25
-                eer_threshold_f: 0.40
+        CHAD:
+            ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/CTD.pth.tar"
+            ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/FTD.pth.tar"
+            eer_threshold_c: 0.25
+            eer_threshold_f: 0.40
 
-            NWPUC:
-                ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/NWPUC/CTD.pth.tar"
-                ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/NWPUC/FTD.pth.tar"
-                eer_threshold_c: 0.03000000000000001
-                eer_threshold_f: 0.0644547895546187
+        NWPUC:
+            ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/NWPUC/CTD.pth.tar"
+            ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/NWPUC/FTD.pth.tar"
+            eer_threshold_c: 0.03000000000000001
+            eer_threshold_f: 0.0644547895546187
 
-            SHT:
-                ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/SHT/CTD.pth.tar"
-                ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/SHT/FTD.pth.tar"
-                eer_threshold_c: 0.03000000000000001
-                eer_threshold_f: 0.0644547895546187
+        SHT:
+            ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/SHT/CTD.pth.tar"
+            ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/SHT/FTD.pth.tar"
+            eer_threshold_c: 0.03000000000000001
+            eer_threshold_f: 0.0644547895546187
 
     pose:
         name: "vitpose"
@@ -87,6 +82,16 @@ models:
                 l:
                     config: "../mmpose/configs/body_2d_keypoint/rtmpose/coco/rtmpose-l_8xb256-420e_coco-256x192.py"
                     checkpoint: "./rtmpose-l_simcc-coco_pt-aic-coco_420e-256x192-1352a4d2_20230127.pth"
+                m:
+                    config: "../mmpose/configs/body_2d_keypoint/rtmpose/coco/rtmpose-m_8xb256-420e_coco-256x192.py"
+                    checkpoint: "./rtmpose-m_simcc-coco_pt-aic-coco_420e-256x192-d8dd5ca4_20230127.pth"
+                s:
+                    config: "../mmpose/configs/body_2d_keypoint/rtmpose/coco/rtmpose-s_8xb256-420e_coco-256x192.py"
+                    checkpoint: "./rtmpose-s_simcc-coco_pt-aic-coco_420e-256x192-8edcf0d7_20230127.pth"
+                t:
+                    config: "../mmpose/configs/body_2d_keypoint/rtmpose/coco/rtmpose-t_8xb256-420e_coco-256x192.py"
+                    checkpoint: "./rtmpose-tiny_simcc-coco_pt-aic-coco_420e-256x192-e613ba3f_20230127.pth"
+
             yolo-pose:
                 x: "./yolo26x-pose.pt"
                 l: "./yolo26l-pose.pt"

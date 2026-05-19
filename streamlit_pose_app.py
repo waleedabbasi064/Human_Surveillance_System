@@ -9,7 +9,7 @@ import cv2
 import traceback
 from copy import deepcopy
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 # Local pipeline imports
 from PoseEstimationModel.pose_estimation import Config, PosePipeline
@@ -27,41 +27,26 @@ def load_base_cfg() -> Dict:
         return yaml.safe_load(f)
 
 BASE_CFG = load_base_cfg()
-POSE_WEIGHTS = BASE_CFG["models"]["pose"]["weights"]
+POSE_WEIGHTS = BASE_CFG["models"]["pose"].get("weights", {})
 DET_WEIGHTS = BASE_CFG["models"]["detection"].get("weights", {})
 SPARTA_CFG = BASE_CFG.get("models", {}).get("sparta", {})
-SPARTA_CHECKPOINTS = SPARTA_CFG.get("checkpoints", {})
-SPARTA_PRESETS = SPARTA_CFG.get("presets", {})
+SPARTA_CORE_KEYS = {"branch", "relative", "token_config", "num_kp", "seg_len", "model_num_heads", "model_latent_dim", "dropout"}
+SPARTA_WEIGHTSETS = {
+    key: value
+    for key, value in SPARTA_CFG.items()
+    if isinstance(value, dict) and ("ctd" in value or "ftd" in value)
+}
 
 def variants_for(family: str) -> Tuple[str, ...]:
     block = POSE_WEIGHTS.get(family, {})
     return tuple(block.keys())
 
-POSE_VARIANTS = {
-    "vitpose": variants_for("vitpose"),
-    "rtm": variants_for("rtm"),
-    "yolo-pose": tuple(POSE_WEIGHTS.get("yolo-pose", {}).keys()),
-}
-
-DET_VARIANTS = tuple(DET_WEIGHTS.get("yolo", {}).keys() or ("x", "l", "m", "s", "n"))
-
-PRESETS = {
-    "Real-time (fastest)": {
-        "pose": ("yolo-pose", "n"),
-        "det": "n",
-        "blurb": "Uses YOLO-Pose nano; best for real-time with minimal latency.",
-    },
-    "Balanced": {
-        "pose": ("rtm", "s"),
-        "det": "s",
-        "blurb": "RTMPose-small gives a good speed/accuracy trade-off.",
-    },
-    "High accuracy": {
-        "pose": ("vitpose", "large"),
-        "det": "x",
-        "blurb": "ViTPose-large maximizes keypoint quality (heavier).",
-    },
-    "Custom": None,
+POSE_FAMILIES = tuple(POSE_WEIGHTS.keys())
+POSE_VARIANTS = {family: variants_for(family) for family in POSE_FAMILIES}
+DET_FAMILIES = tuple(DET_WEIGHTS.keys()) or ("yolo",)
+DET_VARIANTS_BY_FAMILY = {
+    family: tuple(DET_WEIGHTS.get(family, {}).keys()) or ("n", "s", "m", "l", "x")
+    for family in DET_FAMILIES
 }
 
 def save_upload(upload) -> Path:
@@ -84,6 +69,7 @@ def build_run_config(
     base_cfg: Dict,
     pose_family: str,
     pose_variant: str,
+    det_family: str,
     det_variant: str,
     device: str,
     video_path: Path,
@@ -92,7 +78,7 @@ def build_run_config(
     cfg = deepcopy(base_cfg)
     cfg["models"]["pose"]["name"] = pose_family
     cfg["models"]["pose"]["variant"] = pose_variant
-    cfg["models"]["detection"]["name"] = "yolo"
+    cfg["models"]["detection"]["name"] = det_family
     cfg["models"]["detection"]["variant"] = det_variant
     
     if device != "auto":
@@ -106,20 +92,13 @@ def build_run_config(
     return cfg
 
 
-def resolve_sparta_defaults(selected_preset: str, sparta_branch: str) -> Tuple[str, str, float | None, float | None]:
-    ckpt_block = SPARTA_CHECKPOINTS
-    preset_block = SPARTA_PRESETS.get(selected_preset, {}) if selected_preset != "Active config" else {}
-
-    default_ctd = preset_block.get("ctd", ckpt_block.get("sparta_c", ""))
-    default_ftd = preset_block.get("ftd", ckpt_block.get("sparta_f", ""))
-    threshold_c = preset_block.get("eer_threshold_c", ckpt_block.get("eer_threshold_c"))
-    threshold_f = preset_block.get("eer_threshold_f", ckpt_block.get("eer_threshold_f"))
-
-    if sparta_branch == "SPARTA_H":
-        return default_ctd, default_ftd, threshold_c, threshold_f
-    if sparta_branch == "SPARTA_F":
-        return default_ftd, "", threshold_c, threshold_f
-    return default_ctd, "", threshold_c, threshold_f
+def resolve_sparta_defaults(selected_weights: str) -> Tuple[str, str, float | None, float | None]:
+    block = SPARTA_WEIGHTSETS.get(selected_weights, {})
+    default_ctd = block.get("ctd", "")
+    default_ftd = block.get("ftd", "")
+    threshold_c = block.get("eer_threshold_c")
+    threshold_f = block.get("eer_threshold_f")
+    return default_ctd, default_ftd, threshold_c, threshold_f
 
 
 def build_sparta_config(
@@ -131,7 +110,7 @@ def build_sparta_config(
     th_f: float | None,
     pose_json_dir: Path,
     device: str,
-    selected_preset: str,
+    selected_weightset: str,
 ) -> Dict:
     sparta_cfg = {
         "mode": "test",
@@ -152,7 +131,7 @@ def build_sparta_config(
         "batch_size": base_cfg.get("batch_size", 256) if isinstance(base_cfg.get("batch_size", 256), int) else 256,
         "device": device if device != "auto" else base_cfg.get("models", {}).get("pose", {}).get("device", "cpu"),
         "dataset": base_cfg.get("dataset", "corridor"),
-        "weight_preset": selected_preset,
+        "weight_preset": selected_weightset,
     }
     friendly_branch_map = {
         "SPARTA_C": "SPARTA_C",
@@ -166,7 +145,7 @@ def build_sparta_config(
         sparta_cfg["eer_threshold_c"] = th_c
         sparta_cfg["eer_threshold_f"] = th_f
     else:
-        sparta_cfg["model_ckpt_dir"] = ckpt_c  # for C or F we treat ckpt_c as main ckpt
+        sparta_cfg["model_ckpt_dir"] = ckpt_c if sparta_branch == "SPARTA_C" else ckpt_f
         if sparta_branch == "SPARTA_C":
             sparta_cfg["eer_threshold_c"] = th_c
         else:
@@ -321,42 +300,58 @@ def main():
     # --- SIDEBAR: Model Configuration ---
     with st.sidebar:
         st.title("⚙️ Configuration")
-        preset = st.radio("Select Profile", list(PRESETS.keys()), horizontal=False)
-        preset_info = PRESETS.get(preset)
 
-        if preset_info:
-            pose_family, pose_variant = preset_info["pose"]
-            det_variant = preset_info["det"]
-            st.info(preset_info["blurb"])
-        else:
-            pose_family = st.selectbox("Pose Model", list(POSE_VARIANTS.keys()))
-            pose_variant = st.selectbox("Variant", POSE_VARIANTS.get(pose_family, ["large"]))
-            det_variant = st.selectbox("Detection (YOLO)", DET_VARIANTS)
+        st.subheader("Detection Model")
+        det_family = BASE_CFG["models"]["detection"].get("name", DET_FAMILIES[0])
+        det_variant_options = DET_VARIANTS_BY_FAMILY.get(det_family, ("n", "s", "m", "l", "x"))
+        base_det_variant = BASE_CFG["models"]["detection"].get("variant", det_variant_options[0])
+        det_variant_index = det_variant_options.index(base_det_variant) if base_det_variant in det_variant_options else 0
+        det_variant = st.selectbox("Detection Variant", det_variant_options, index=det_variant_index)
 
-        device = st.selectbox("Compute Device", ["cuda:0", "cpu", "auto"])
-        save_video = st.toggle("Generate Visualization", value=True)
-        
         st.divider()
-        st.subheader("Anomaly Scoring")
-        sparta_branch_display = st.selectbox("Variant", ["Reconstruction Model", "Future trajectory prediction model", "Hybrid"])
+        st.subheader("Pose Estimation Model")
+        base_pose_family = BASE_CFG["models"]["pose"].get("name", POSE_FAMILIES[0])
+        pose_family_index = POSE_FAMILIES.index(base_pose_family) if base_pose_family in POSE_FAMILIES else 0
+        pose_family = st.selectbox("Pose Family", POSE_FAMILIES, index=pose_family_index)
+        pose_variant_options = POSE_VARIANTS.get(pose_family, ())
+        base_pose_variant = BASE_CFG["models"]["pose"].get("variant", pose_variant_options[0] if pose_variant_options else "")
+        pose_variant_index = pose_variant_options.index(base_pose_variant) if base_pose_variant in pose_variant_options else 0
+        pose_variant = st.selectbox("Pose Variant", pose_variant_options, index=pose_variant_index)
+
+        device = st.selectbox("Compute Device", ["cuda", "cpu", "auto"], index=0 if BASE_CFG["models"]["pose"].get("device", "cuda").startswith("cuda") else 1)
+        save_video = st.toggle("Generate Visualization", value=True)
+
+        st.divider()
+        st.subheader("SPARTA / Anomaly Model")
+        sparta_branch_display = st.selectbox("SPARTA Branch", ["SPARTA-C", "SPARTA-F", "SPARTA-H"])
         sparta_branch_map = {
-            "Reconstruction Model": "SPARTA_C",
-            "Future trajectory prediction model": "SPARTA_F",
-            "Hybrid": "SPARTA_H",
+            "SPARTA-C": "SPARTA_C",
+            "SPARTA-F": "SPARTA_F",
+            "SPARTA-H": "SPARTA_H",
         }
         sparta_branch = sparta_branch_map.get(sparta_branch_display, sparta_branch_display)
-        sparta_preset_options = ["Active config"] + list(SPARTA_PRESETS.keys())
-        selected_sparta_preset = st.selectbox("Weights Dataset", sparta_preset_options, index=0)
-        ckpt_c_default, ckpt_f_default, th_c_default, th_f_default = resolve_sparta_defaults(selected_sparta_preset, sparta_branch)
-        if selected_sparta_preset != "Active config":
-            st.caption(f"Using preset from `models.sparta.presets.{selected_sparta_preset}`")
+
+        weightset_options = tuple(SPARTA_WEIGHTSETS.keys())
+        default_weightset = "IITB" if "IITB" in SPARTA_WEIGHTSETS else (weightset_options[0] if weightset_options else "")
+        weightset_index = weightset_options.index(default_weightset) if default_weightset in weightset_options else 0
+        selected_sparta_weightset = st.selectbox("Pretrained Weights", weightset_options, index=weightset_index)
+
+        ckpt_c_default, ckpt_f_default, th_c_default, th_f_default = resolve_sparta_defaults(selected_sparta_weightset)
         if sparta_branch == "SPARTA_H":
-            ckpt_c = st.text_input("Checkpoint (C)", ckpt_c_default)
-            ckpt_f = st.text_input("Checkpoint (F)", ckpt_f_default)
+            ckpt_c = ckpt_c_default
+            ckpt_f = ckpt_f_default
+            th_c = float(th_c_default if th_c_default is not None else 0.03)
+            th_f = float(th_f_default if th_f_default is not None else 0.06)
+        elif sparta_branch == "SPARTA_F":
+            ckpt_c = ""
+            ckpt_f = ckpt_f_default
+            th_c = None
+            th_f = float(th_f_default if th_f_default is not None else 0.06)
         else:
-            ckpt_c = st.text_input("Checkpoint", ckpt_c_default)
+            ckpt_c = ckpt_c_default
             ckpt_f = ""
-    
+            th_f = None
+            th_c = float(th_c_default if th_c_default is not None else 0.03)
     # --- MAIN: Title and Upload ---
     st.title("🎥 Human-Centric Surveillance System")
     st.caption("Real-time pose estimation with anomaly detection")
@@ -371,7 +366,7 @@ def main():
         # Start Analysis Button
         if st.button("🚀 Start Live Analysis", use_container_width=True, type="primary"):
             # 1. Setup Config
-            run_cfg = build_run_config(BASE_CFG, pose_family, pose_variant, det_variant, device, video_path, save_video)
+            run_cfg = build_run_config(BASE_CFG, pose_family, pose_variant, det_family, det_variant, device, video_path, save_video)
             
             with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=POSE_DIR, delete=False) as tmp:
                 yaml.safe_dump(run_cfg, tmp)
@@ -431,11 +426,11 @@ def main():
                         sparta_branch,
                         ckpt_c,
                         ckpt_f,
-                        th_c_default,
-                        th_f_default,
+                        th_c,
+                        th_f,
                         final_json_path.parent,
                         device,
-                        selected_sparta_preset,
+                        selected_sparta_weightset,
                     )
                     
                     with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=BASE_DIR, delete=False) as tmp_sparta:
