@@ -83,6 +83,19 @@ def _bbox_iou_xyxy(box_a: list[float] | tuple[float, float, float, float], box_b
     return inter / denom if denom > 0 else 0.0
 
 
+def _open_video_capture(source: Any) -> cv2.VideoCapture:
+    if isinstance(source, int):
+        return cv2.VideoCapture(source)
+    source_str = str(source)
+    if source_str.startswith("__camera__:"):
+        try:
+            cam_idx = int(source_str.split(":", 1)[1])
+        except Exception:
+            cam_idx = 0
+        return cv2.VideoCapture(cam_idx)
+    return cv2.VideoCapture(source_str)
+
+
 def _random_vibrant_bgr(rng: random.Random) -> tuple[int, int, int]:
     # Use HSV to avoid dark/greyish random RGBs; OpenCV uses BGR.
     h = rng.random()
@@ -210,9 +223,14 @@ class Config:
         cfg.setdefault("pose_match_iou", 0.05)
         return cfg
 
-    def resolved_paths(self) -> Dict[str, Path]:
+    def resolved_paths(self) -> Dict[str, Any]:
         raw_paths = self.cfg.get("paths", {})
-        paths = {"input_video": self.resolve(raw_paths["input_video"])}
+        raw_input = raw_paths.get("input_video")
+        if isinstance(raw_input, str) and raw_input.startswith("__camera__:"):
+            input_video = raw_input
+        else:
+            input_video = self.resolve(raw_input)
+        paths = {"input_video": input_video}
         pose_root = self.resolve(raw_paths.get("pose_output_dir") or "../pose_outputs")
         paths["pose_output_dir"] = pose_root
         paths["pose_video_dir"] = pose_root / "pose_vis"
@@ -269,7 +287,7 @@ class PersonDetector:
         )
 
     def run(self, video_path: Path) -> List[Dict[str, Any]]:
-        cap = cv2.VideoCapture(str(video_path))
+        cap = _open_video_capture(str(video_path))
         cap.set(cv2.CAP_PROP_BUFFERSIZE, int(self.cfg.runtime_cfg.get("capture_buffer_size", 2)))
         if not cap.isOpened(): raise RuntimeError(f"Cannot open: {video_path}")
 
@@ -392,7 +410,7 @@ class MMPoseTopDownEstimator(PoseEstimatorBase):
         output_name: Optional[str] = None,
         output_video_path: Optional[Path] = None,
     ) -> Path:
-        cap = cv2.VideoCapture(str(video_path))
+        cap = _open_video_capture(str(video_path))
         cap.set(cv2.CAP_PROP_BUFFERSIZE, int(self.cfg.runtime_cfg.get("capture_buffer_size", 2)))
         output_dir.mkdir(parents=True, exist_ok=True)
         sparta_json = defaultdict(dict)
@@ -565,7 +583,7 @@ class YoloPoseEstimator(PoseEstimatorBase):
         output_name: Optional[str] = None,
         output_video_path: Optional[Path] = None,
     ) -> Path:
-        cap = cv2.VideoCapture(str(video_path))
+        cap = _open_video_capture(str(video_path))
         cap.set(cv2.CAP_PROP_BUFFERSIZE, int(self.cfg.runtime_cfg.get("capture_buffer_size", 2)))
         output_dir.mkdir(parents=True, exist_ok=True)
         sparta_json = defaultdict(dict)
@@ -653,7 +671,7 @@ class PosePipeline:
         Uses rolling keypoint buffers for each person to enable live SPARTA inference.
         """
         p = self.paths
-        cap = cv2.VideoCapture(str(p["input_video"]))
+        cap = _open_video_capture(str(p["input_video"]))
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open video: {p['input_video']}")
         

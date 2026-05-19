@@ -55,6 +55,13 @@ def save_upload(upload) -> Path:
         f.write(upload.getbuffer())
     return target
 
+def camera_available(index: int = 0) -> bool:
+    cap = cv2.VideoCapture(index)
+    ok = cap.isOpened()
+    cap.release()
+    return bool(ok)
+
+
 def get_expected_name(stem: str, prefix: str) -> str:
     """Replicates the 01_xxxx logic from pose_estimation.py"""
     digits = re.findall(r'\d+', stem)
@@ -356,12 +363,30 @@ def main():
     st.title("🎥 Human-Centric Surveillance System")
     st.caption("Real-time pose estimation with anomaly detection")
     
-    # Upload Section
-    upload = st.file_uploader("📹 Upload Video", type=["mp4", "avi", "mov"], label_visibility="collapsed")
+    # Video Source Section
+    local_camera_available = camera_available(0)
+    source_options = ["Upload Video"] + (["Use Camera"] if local_camera_available else [])
+    source_mode = st.radio("Choose Input Source", source_options, horizontal=True)
+    if not local_camera_available:
+        st.caption("No local camera detected on this device. Upload mode is available.")
+
+    upload = None
     video_path = None
-    if upload:
-        video_path = save_upload(upload)
-    
+    video_source_label = None
+    source_stem = None
+
+    if source_mode == "Upload Video":
+        upload = st.file_uploader("📹 Upload Video", type=["mp4", "avi", "mov"], label_visibility="collapsed")
+        if upload:
+            video_path = save_upload(upload)
+            video_source_label = str(video_path)
+            source_stem = video_path.stem
+    else:
+        video_path = "__camera__:0"
+        video_source_label = "Local Camera (0)"
+        source_stem = "camera0"
+        st.info("Live camera input selected. The app will use local camera index 0.")
+
     if video_path:
         # Start Analysis Button
         if st.button("🚀 Start Live Analysis", use_container_width=True, type="primary"):
@@ -380,7 +405,10 @@ def main():
                 
                 with col_original:
                     st.markdown("#### Original video ")
-                    st.video(upload, start_time=0)
+                    if source_mode == "Upload Video" and upload is not None:
+                        st.video(upload, start_time=0)
+                    else:
+                        st.info("Using live local camera stream.")
                 
                 with col_processed:
                     st.markdown("####  Model processing...")
@@ -409,7 +437,7 @@ def main():
                     
                     # Get JSON path
                     res_prefix = run_cfg["paths"]["static_prefix"]
-                    expected_json_name = get_expected_name(video_path.stem, res_prefix) + run_cfg["paths"]["pose_json_suffix"]
+                    expected_json_name = get_expected_name(source_stem or "camera0", res_prefix) + run_cfg["paths"]["pose_json_suffix"]
                     final_json_path = Path(run_cfg["paths"]["pose_output_dir"]) / expected_json_name
                 
                 except Exception as e:
