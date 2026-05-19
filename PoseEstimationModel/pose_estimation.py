@@ -20,6 +20,8 @@ import numpy as np
 import torch
 import yaml
 from tqdm import tqdm
+
+torch.backends.cudnn.benchmark = True
 from ultralytics import YOLO
 from ultralytics.trackers.byte_tracker import BYTETracker
 from ultralytics.engine.results import Boxes
@@ -35,6 +37,51 @@ SKELETON_CONNECTIONS = [
     (1, 2), (0, 1), (0, 2), (1, 3), (2, 4),          # Head
     (3, 5), (4, 6)                                   # Ears to Shoulders
 ]
+
+def _bbox_area_xyxy(bbox: list[float] | tuple[float, float, float, float]) -> float:
+    x1, y1, x2, y2 = bbox
+    return max(0.0, float(x2) - float(x1)) * max(0.0, float(y2) - float(y1))
+
+
+def _resize_frame_if_needed(frame: np.ndarray, runtime_cfg: Dict[str, Any]) -> tuple[np.ndarray, float, float]:
+    target_w = int(runtime_cfg.get("resize_width", 0) or 0)
+    target_h = int(runtime_cfg.get("resize_height", 0) or 0)
+    if target_w <= 0 or target_h <= 0:
+        max_w = int(runtime_cfg.get("max_frame_width", 0) or 0)
+        if max_w > 0 and frame.shape[1] > max_w:
+            scale = max_w / float(frame.shape[1])
+            target_w = max_w
+            target_h = max(1, int(round(frame.shape[0] * scale)))
+    if target_w <= 0 or target_h <= 0:
+        return frame, 1.0, 1.0
+    resized = cv2.resize(frame, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+    sx = target_w / float(frame.shape[1])
+    sy = target_h / float(frame.shape[0])
+    return resized, sx, sy
+
+
+def _scale_bbox_xyxy(bbox: list[float] | tuple[float, float, float, float], sx: float, sy: float) -> list[float]:
+    x1, y1, x2, y2 = bbox
+    return [float(x1) * sx, float(y1) * sy, float(x2) * sx, float(y2) * sy]
+
+
+def _bbox_iou_xyxy(box_a: list[float] | tuple[float, float, float, float], box_b: list[float] | tuple[float, float, float, float]) -> float:
+    ax1, ay1, ax2, ay2 = map(float, box_a)
+    bx1, by1, bx2, by2 = map(float, box_b)
+    inter_x1 = max(ax1, bx1)
+    inter_y1 = max(ay1, by1)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_w = max(0.0, inter_x2 - inter_x1)
+    inter_h = max(0.0, inter_y2 - inter_y1)
+    inter = inter_w * inter_h
+    if inter <= 0:
+        return 0.0
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    denom = area_a + area_b - inter
+    return inter / denom if denom > 0 else 0.0
+
 
 def _random_vibrant_bgr(rng: random.Random) -> tuple[int, int, int]:
     # Use HSV to avoid dark/greyish random RGBs; OpenCV uses BGR.
@@ -150,6 +197,19 @@ class Config:
     @property
     def pose_cfg(self) -> Dict[str, Any]: return self.cfg["models"]["pose"]
 
+    @property
+    def runtime_cfg(self) -> Dict[str, Any]:
+        cfg = dict(self.cfg.get("runtime", {}) or {})
+        cfg.setdefault("resize_width", 640)
+        cfg.setdefault("resize_height", 360)
+        cfg.setdefault("capture_buffer_size", 2)
+        cfg.setdefault("use_fp16", True)
+        cfg.setdefault("min_pose_bbox_area", 2500)
+        cfg.setdefault("pose_every_n_frames", 3)
+        cfg.setdefault("sparta_every_n_frames", 5)
+        cfg.setdefault("pose_match_iou", 0.05)
+        return cfg
+
     def resolved_paths(self) -> Dict[str, Path]:
         raw_paths = self.cfg.get("paths", {})
         paths = {"input_video": self.resolve(raw_paths["input_video"])}
@@ -210,6 +270,7 @@ class PersonDetector:
 
     def run(self, video_path: Path) -> List[Dict[str, Any]]:
         cap = cv2.VideoCapture(str(video_path))
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, int(self.cfg.runtime_cfg.get("capture_buffer_size", 2)))
         if not cap.isOpened(): raise RuntimeError(f"Cannot open: {video_path}")
 
         tracker = BYTETracker(self.bt_args, frame_rate=cap.get(cv2.CAP_PROP_FPS))
@@ -222,11 +283,12 @@ class PersonDetector:
                 ret, frame = cap.read()
                 if not ret: break
 
+                frame_infer, sx, sy = _resize_frame_if_needed(frame, self.cfg.runtime_cfg)
                 kwargs = {"conf": self.conf, "iou": self.iou, "verbose": False, "device": self.device}
                 if self.classes: kwargs["classes"] = self.classes
 
-                # model() returns a list, we index to get the Results object
-                results_list = self.model(frame, **kwargs)
+                with torch.inference_mode():
+                    results_list = self.model(frame_infer, **kwargs)
                 results = results_list[0]  # Results object
 
                 if results.boxes is not None:
@@ -238,11 +300,14 @@ class PersonDetector:
                     boxes = Boxes(torch.zeros((0, 6)), frame.shape[:2])
 
                 # BYTETracker expects a Boxes-like object with .conf/.cls attributes
-                tracks = tracker.update(boxes, frame)
+                tracks = tracker.update(boxes, frame_runtime)
 
                 for t in tracks:  # t: [x1, y1, x2, y2, track_id, score, cls, det_idx]
                     if len(t) >= 5:
                         x1, y1, x2, y2 = t[:4]
+                        if sx != 1.0 or sy != 1.0:
+                            x1, x2 = x1 / sx, x2 / sx
+                            y1, y2 = y1 / sy, y2 / sy
                         track_id = t[4]
                         score = t[5] if len(t) > 5 else None
                         cls = t[6] if len(t) > 6 else None
@@ -285,16 +350,11 @@ class MMPoseTopDownEstimator(PoseEstimatorBase):
         self._vis_line_thickness = int(cfg.pose_cfg.get("vis_line_thickness", 2))
         self._vis_kpt_radius = int(cfg.pose_cfg.get("vis_kpt_radius", 2))
 
-    def _estimate(self, frame, bbox):
-        results = self.inference_topdown(self.model, frame, [bbox])
-        if not results:
-            return None
-
+    def _extract_pose_from_mmpose_result(self, sample):
         try:
-            sample = results[0]  # we pass one bbox at a time
             inst = sample.pred_instances
-            kpts = inst.keypoints  # shape: (num, K, 2)
-            scores = inst.keypoint_scores  # shape: (num, K)
+            kpts = inst.keypoints
+            scores = inst.keypoint_scores
             if torch.is_tensor(kpts):
                 kpts = kpts.cpu()
             if torch.is_tensor(scores):
@@ -306,6 +366,23 @@ class MMPoseTopDownEstimator(PoseEstimatorBase):
         except Exception:
             return None
 
+    def _estimate(self, frame, bbox):
+        with torch.inference_mode():
+            results = self.inference_topdown(self.model, frame, [bbox])
+        if not results:
+            return None
+        return self._extract_pose_from_mmpose_result(results[0])
+
+    def _estimate_batch(self, frame, bboxes):
+        if not bboxes:
+            return []
+        with torch.inference_mode():
+            results = self.inference_topdown(self.model, frame, bboxes)
+        outputs = []
+        for sample in results or []:
+            outputs.append(self._extract_pose_from_mmpose_result(sample))
+        return outputs
+
     def process(
         self,
         video_path: Path,
@@ -316,6 +393,7 @@ class MMPoseTopDownEstimator(PoseEstimatorBase):
         output_video_path: Optional[Path] = None,
     ) -> Path:
         cap = cv2.VideoCapture(str(video_path))
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, int(self.cfg.runtime_cfg.get("capture_buffer_size", 2)))
         output_dir.mkdir(parents=True, exist_ok=True)
         sparta_json = defaultdict(dict)
         frame_map = defaultdict(list)
@@ -331,58 +409,58 @@ class MMPoseTopDownEstimator(PoseEstimatorBase):
             writer = cv2.VideoWriter(str(output_video_path), cv2.VideoWriter_fourcc(*self.cfg.pose_cfg.get("fourcc", "XVID")), fps, (w, h))
 
         frame_id = 0
+        min_bbox_area = float(self.cfg.runtime_cfg.get("min_pose_bbox_area", 0.0))
         with tqdm(total=total, desc="Pose Estimation") as pbar:
             while True:
                 ret, frame = cap.read()
-                if not ret: break
-                for p in frame_map.get(frame_id, []):
-                    pose = self._estimate(frame, p["bbox"])
+                if not ret:
+                    break
+
+                frame_pose, sx, sy = _resize_frame_if_needed(frame, self.cfg.runtime_cfg)
+                persons = frame_map.get(frame_id, [])
+                valid_people = []
+                batch_bboxes = []
+                for p in persons:
+                    bbox = p["bbox"]
+                    if min_bbox_area > 0 and _bbox_area_xyxy(bbox) < min_bbox_area:
+                        continue
+                    valid_people.append(p)
+                    batch_bboxes.append(_scale_bbox_xyxy(bbox, sx, sy))
+
+                batch_poses = self._estimate_batch(frame_pose, batch_bboxes)
+                for p, pose in zip(valid_people, batch_poses):
                     if pose and pose["mean"] >= self.conf_threshold:
                         kp_count = len(pose["keypoints"])
                         if self.expected_kp is None:
                             self.expected_kp = kp_count
                         if kp_count != self.expected_kp:
                             continue
-                        
+
+                        if sx != 1.0 or sy != 1.0:
+                            for triplet in pose["keypoints"]:
+                                triplet[0] /= sx
+                                triplet[1] /= sy
+
                         flat = [c for trip in pose["keypoints"] for c in trip]
                         sparta_json[str(p["person_id"])][str(frame_id)] = {
                             "keypoints": flat,
                             "scores": float(pose.get("mean", 0.0))
                         }
 
-                        # --- Visualization Block ---
                         if writer is not None:
                             kpts = pose["keypoints"]
                             min_kpt_conf = float(self.cfg.pose_cfg.get("min_keypoint_confidence", 0.3))
                             color = self._vis_color
-
-                            # 1. Draw Skeleton Lines
                             for start_idx, end_idx in SKELETON_CONNECTIONS:
                                 if start_idx < kp_count and end_idx < kp_count:
                                     x1, y1, s1 = kpts[start_idx]
                                     x2, y2, s2 = kpts[end_idx]
                                     if s1 >= min_kpt_conf and s2 >= min_kpt_conf:
-                                        cv2.line(
-                                            frame,
-                                            (int(x1), int(y1)),
-                                            (int(x2), int(y2)),
-                                            color,
-                                            self._vis_line_thickness,
-                                            lineType=cv2.LINE_AA,
-                                        )
-
-                            # 2. Draw Keypoint Dots
+                                        cv2.line(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, self._vis_line_thickness, lineType=cv2.LINE_AA)
                             for (x, y, s) in kpts:
                                 if s >= min_kpt_conf:
-                                    cv2.circle(
-                                        frame,
-                                        (int(x), int(y)),
-                                        self._vis_kpt_radius,
-                                        color,
-                                        -1,
-                                        lineType=cv2.LINE_AA,
-                                    )
-                
+                                    cv2.circle(frame, (int(x), int(y)), self._vis_kpt_radius, color, -1, lineType=cv2.LINE_AA)
+
                 if writer is not None:
                     writer.write(frame)
                 frame_id += 1
@@ -412,6 +490,72 @@ class YoloPoseEstimator(PoseEstimatorBase):
         self._vis_line_thickness = int(cfg.pose_cfg.get("vis_line_thickness", 1))
         self._vis_kpt_radius = int(cfg.pose_cfg.get("vis_kpt_radius", 2))
 
+        self.use_fp16 = str(cfg.pose_cfg.get("device", "cpu")).startswith("cuda") and bool(cfg.runtime_cfg.get("use_fp16", False))
+
+    def _infer_full_frame(self, frame):
+        with torch.inference_mode():
+            results = self.model(frame, conf=self.conf, verbose=False, half=self.use_fp16)
+        if isinstance(results, (list, tuple)):
+            return results[0] if results else None
+        return results
+
+    def _extract_pose_candidates(self, result, sx: float = 1.0, sy: float = 1.0) -> List[Dict[str, Any]]:
+        if result is None:
+            return []
+        kpt_obj = getattr(result, "keypoints", None)
+        boxes = getattr(result, "boxes", None)
+        if kpt_obj is None or getattr(kpt_obj, "xy", None) is None or getattr(kpt_obj, "conf", None) is None:
+            return []
+        if len(kpt_obj.xy) == 0:
+            return []
+
+        box_xyxy = None
+        if boxes is not None and getattr(boxes, "xyxy", None) is not None and len(boxes.xyxy) > 0:
+            box_xyxy = boxes.xyxy.cpu().numpy()
+
+        candidates = []
+        for idx in range(len(kpt_obj.xy)):
+            kps = kpt_obj.xy[idx].cpu().numpy()
+            confs = kpt_obj.conf[idx].cpu().numpy()
+            if self.expected_kp is None:
+                self.expected_kp = kps.shape
+            if kps.shape != self.expected_kp:
+                continue
+
+            if sx != 1.0 or sy != 1.0:
+                kps[:, 0] /= sx
+                kps[:, 1] /= sy
+
+            triplets = [[float(x), float(y), float(c)] for (x, y), c in zip(kps, confs)]
+            if box_xyxy is not None and idx < len(box_xyxy):
+                bbox = box_xyxy[idx].astype(float).tolist()
+                if sx != 1.0 or sy != 1.0:
+                    bbox = [bbox[0] / sx, bbox[1] / sy, bbox[2] / sx, bbox[3] / sy]
+            else:
+                xs = kps[:, 0]
+                ys = kps[:, 1]
+                bbox = [float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max())]
+
+            candidates.append({
+                "bbox": bbox,
+                "keypoints": triplets,
+                "mean": float(confs.mean()),
+            })
+        return candidates
+
+    def _match_candidate_to_bbox(self, candidates: List[Dict[str, Any]], bbox: list[float]) -> Optional[Dict[str, Any]]:
+        min_iou = float(self.cfg.runtime_cfg.get("pose_match_iou", 0.05))
+        best = None
+        best_iou = 0.0
+        for cand in candidates:
+            iou = _bbox_iou_xyxy(cand["bbox"], bbox)
+            if iou > best_iou:
+                best_iou = iou
+                best = cand
+        if best is None or best_iou < min_iou:
+            return None
+        return best
+
     def process(
         self,
         video_path: Path,
@@ -422,6 +566,7 @@ class YoloPoseEstimator(PoseEstimatorBase):
         output_video_path: Optional[Path] = None,
     ) -> Path:
         cap = cv2.VideoCapture(str(video_path))
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, int(self.cfg.runtime_cfg.get("capture_buffer_size", 2)))
         output_dir.mkdir(parents=True, exist_ok=True)
         sparta_json = defaultdict(dict)
         frame_map = defaultdict(list)
@@ -440,89 +585,43 @@ class YoloPoseEstimator(PoseEstimatorBase):
         with tqdm(total=total, desc="YOLO Pose") as pbar:
             while True:
                 ret, frame = cap.read()
-                if not ret: break
+                if not ret:
+                    break
+                frame_pose, sx, sy = _resize_frame_if_needed(frame, self.cfg.runtime_cfg)
                 persons = frame_map.get(frame_id, [])
+                min_bbox_area = float(self.cfg.runtime_cfg.get("min_pose_bbox_area", 0.0))
+                result = self._infer_full_frame(frame_pose)
+                candidates = self._extract_pose_candidates(result, sx=sx, sy=sy)
+
                 for p in persons:
-                    x1, y1, x2, y2 = map(int, p["bbox"])
-                    frame_h, frame_w = frame.shape[:2]
-                    # Clamp bbox to frame to avoid negative indices wrapping from the end.
-                    x1 = max(0, min(frame_w - 1, x1))
-                    y1 = max(0, min(frame_h - 1, y1))
-                    x2 = max(0, min(frame_w, x2))
-                    y2 = max(0, min(frame_h, y2))
-                    if x2 <= x1 or y2 <= y1:
+                    if min_bbox_area > 0 and _bbox_area_xyxy(p["bbox"]) < min_bbox_area:
+                        continue
+                    pose = self._match_candidate_to_bbox(candidates, p["bbox"])
+                    if pose is None or pose.get("mean", 0.0) < self.conf_threshold:
                         continue
 
-                    roi = frame[y1:y2, x1:x2]
-                    if roi.size == 0:
-                        continue
-
-                    # Ultralytics returns a list[Results] for inference on an array.
-                    results = self.model(roi, conf=self.conf, verbose=False)
-                    if isinstance(results, (list, tuple)):
-                        if not results:
-                            continue
-                        result = results[0]
-                    else:
-                        result = results
-
-                    kpt_obj = getattr(result, "keypoints", None)
-                    if kpt_obj is None or getattr(kpt_obj, "xy", None) is None or getattr(kpt_obj, "conf", None) is None:
-                        continue
-                    if len(kpt_obj.xy) == 0:
-                        continue
-
-                    # If multiple poses are detected inside the ROI, pick the most confident.
-                    best_i = 0
-                    boxes = getattr(result, "boxes", None)
-                    if boxes is not None and getattr(boxes, "conf", None) is not None and len(boxes.conf) > 0:
-                        try:
-                            best_i = int(boxes.conf.argmax().item())
-                        except Exception:
-                            best_i = 0
-
-                    kps = kpt_obj.xy[best_i].cpu().numpy()
-                    confs = kpt_obj.conf[best_i].cpu().numpy()
-
-                    if self.expected_kp is None:
-                        self.expected_kp = kps.shape
-                    if kps.shape != self.expected_kp:
-                        continue
-
-                    kps[:, 0] += x1
-                    kps[:, 1] += y1
-
-                    triplets = [[float(x), float(y), float(c)] for (x, y), c in zip(kps, confs)]
+                    triplets = pose["keypoints"]
                     flat = [c for trip in triplets for c in trip]
                     sparta_json[str(p["person_id"])][str(frame_id)] = {
                         "keypoints": flat,
-                        "scores": float(confs.mean()),
+                        "scores": float(pose["mean"]),
                     }
 
-                    # --- Visualization Block ---
                     if writer is not None:
+                        kps = pose["keypoints"]
                         color = self._vis_color
-                        # 1. Draw Skeleton Lines
                         for start_idx, end_idx in SKELETON_CONNECTIONS:
                             if start_idx < len(kps) and end_idx < len(kps):
-                                if confs[start_idx] >= self.min_kpt_conf and confs[end_idx] >= self.min_kpt_conf:
-                                    p1 = (int(kps[start_idx][0]), int(kps[start_idx][1]))
-                                    p2 = (int(kps[end_idx][0]), int(kps[end_idx][1]))
-                                    cv2.line(frame, p1, p2, color, self._vis_line_thickness, lineType=cv2.LINE_AA)
-
-                        # 2. Draw Keypoint Dots
-                        for (x, y), c in zip(kps, confs):
+                                x1, y1, s1 = kps[start_idx]
+                                x2, y2, s2 = kps[end_idx]
+                                if s1 >= self.min_kpt_conf and s2 >= self.min_kpt_conf:
+                                    cv2.line(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, self._vis_line_thickness, lineType=cv2.LINE_AA)
+                        for x, y, c in kps:
                             if c >= self.min_kpt_conf:
-                                cv2.circle(
-                                    frame,
-                                    (int(x), int(y)),
-                                    self._vis_kpt_radius,
-                                    color,
-                                    -1,
-                                    lineType=cv2.LINE_AA,
-                                )
+                                cv2.circle(frame, (int(x), int(y)), self._vis_kpt_radius, color, -1, lineType=cv2.LINE_AA)
 
-                if writer is not None: writer.write(frame)
+                if writer is not None:
+                    writer.write(frame)
                 frame_id += 1
                 pbar.update(1)
 
@@ -558,8 +657,13 @@ class PosePipeline:
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open video: {p['input_video']}")
         
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, int(self.config.runtime_cfg.get("capture_buffer_size", 2)))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        runtime_cfg = self.config.runtime_cfg
+        pose_every_n = max(1, int(runtime_cfg.get("pose_every_n_frames", 1) or 1))
+        sparta_every_n = max(1, int(runtime_cfg.get("sparta_every_n_frames", 1) or 1))
+        min_bbox_area = float(runtime_cfg.get("min_pose_bbox_area", 0.0) or 0.0)
         
         # Initialize detector, tracker, and pose estimator once
         detector = PersonDetector(self.config)
@@ -667,6 +771,7 @@ class PosePipeline:
         # Rolling buffers: per-person keypoint sequences for SPARTA
         per_person_kpts = defaultdict(list)  # {person_id: [(frame_id, keypoints_array), ...]}
         per_person_anomaly = defaultdict(lambda: defaultdict(lambda: 0))  # {person_id: {frame_id: 0/1}}
+        cached_pose_by_track: Dict[int, Dict[str, Any]] = {}
         
         with tqdm(total=total_frames, desc="Processing") as pbar:
             while True:
@@ -679,7 +784,11 @@ class PosePipeline:
                 if detector.classes:
                     det_kwargs["classes"] = detector.classes
                 
-                results_list = detector.model(frame, **det_kwargs)
+                frame_runtime, sx, sy = _resize_frame_if_needed(frame, runtime_cfg)
+                if str(detector.device).startswith("cuda") and bool(runtime_cfg.get("use_fp16", False)):
+                    det_kwargs["half"] = True
+                with torch.inference_mode():
+                    results_list = detector.model(frame_runtime, **det_kwargs)
                 if isinstance(results_list, list) and len(results_list) > 0:
                     results = results_list[0]
                 else:
@@ -692,22 +801,43 @@ class PosePipeline:
                     boxes = Boxes(torch.zeros((0, 6)), frame.shape[:2])
                 
                 # Update tracker with detected boxes
-                tracks = tracker.update(boxes, frame)
+                tracks = tracker.update(boxes, frame_runtime)
                 
                 # --- STEP 2: Pose Estimation ---
+                refresh_pose = (frame_id % pose_every_n == 0)
+                yolo_pose_candidates = None
+                if isinstance(estimator, YoloPoseEstimator) and refresh_pose:
+                    yolo_result = estimator._infer_full_frame(frame_runtime)
+                    yolo_pose_candidates = estimator._extract_pose_candidates(yolo_result, sx=sx, sy=sy)
+
                 for t in tracks:
                     if len(t) >= 5:
                         x1, y1, x2, y2 = t[:4]
                         track_id = int(t[4])
                         
                         # Extract bbox and run pose estimation
+                        if sx != 1.0 or sy != 1.0:
+                            x1, x2 = x1 / sx, x2 / sx
+                            y1, y2 = y1 / sy, y2 / sy
                         bbox = [float(x1), float(y1), float(x2), float(y2)]
+                        if min_bbox_area > 0 and _bbox_area_xyxy(bbox) < min_bbox_area:
+                            continue
                         
-                        if isinstance(estimator, YoloPoseEstimator):
-                            pose = self._estimate_yolo_pose(estimator, frame, bbox)
+                        pose = None
+                        if refresh_pose or track_id not in cached_pose_by_track:
+                            if isinstance(estimator, YoloPoseEstimator):
+                                pose = estimator._match_candidate_to_bbox(yolo_pose_candidates or [], bbox)
+                            else:
+                                pose = estimator._estimate(frame_runtime if (sx != 1.0 or sy != 1.0) else frame, _scale_bbox_xyxy(bbox, sx, sy) if (sx != 1.0 or sy != 1.0) else bbox)
+                                if pose and (sx != 1.0 or sy != 1.0):
+                                    for triplet in pose["keypoints"]:
+                                        triplet[0] /= sx
+                                        triplet[1] /= sy
+                            if pose and pose.get("mean", 0) >= estimator.conf_threshold:
+                                cached_pose_by_track[track_id] = pose
                         else:
-                            pose = estimator._estimate(frame, bbox)
-                        
+                            pose = cached_pose_by_track.get(track_id)
+
                         if pose and pose.get("mean", 0) >= estimator.conf_threshold:
                             # Store keypoints
                             flat = [c for trip in pose["keypoints"] for c in trip]
@@ -728,7 +858,7 @@ class PosePipeline:
                                     per_person_kpts[track_id] = per_person_kpts[track_id][-(seg_len + 5):]
                                 
                                 # Run SPARTA inference when buffer has at least seg_len frames
-                                if len(per_person_kpts[track_id]) >= seg_len:
+                                if len(per_person_kpts[track_id]) >= seg_len and frame_id % sparta_every_n == 0:
                                     # Prepare batch data from recent seg_len frames
                                     recent_frames = per_person_kpts[track_id][-seg_len:]
                                     batch_kpts = np.array([kpt_arr for _, kpt_arr in recent_frames], dtype=np.float32)  # (seg_len, num_kp, 2)
@@ -745,7 +875,7 @@ class PosePipeline:
                                     kpts_tensor = torch.from_numpy(batch_kpts.transpose(2, 0, 1)).unsqueeze(0).to(device, dtype=torch.float32)
                                     
                                     try:
-                                        with torch.no_grad():
+                                        with torch.inference_mode():
                                             if sparta_branch == "SPARTA_C":
                                                 recon = sparta_model.forward(kpts_tensor, kpts_tensor)
                                                 loss = loss_func.calculate(kpts_tensor, recon)

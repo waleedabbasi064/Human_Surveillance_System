@@ -155,8 +155,8 @@ def build_sparta_config(
         "weight_preset": selected_preset,
     }
     friendly_branch_map = {
-        "Reconstruction Model": "SPARTA_C",
-        "Future trajecory prediction model": "SPARTA_F",
+        "SPARTA_C": "SPARTA_C",
+        "SPARTA_F": "SPARTA_F",
         "Hybrid": "SPARTA_H",
     }
     sparta_branch = friendly_branch_map.get(sparta_branch, sparta_branch)
@@ -419,7 +419,7 @@ def main():
                 
                 except Exception as e:
                     st.error(f"❌ Processing Error: {str(e)}")
-                    progress_container.error(f"Details: {traceback.format_exc()}")
+                    status_text.error(f"Details: {traceback.format_exc()}")
 
                 # --- ANOMALY SCORING ---
                 st.divider()

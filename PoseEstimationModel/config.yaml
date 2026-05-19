@@ -8,11 +8,11 @@ models:
         classes:
         weights:
             yolo:
-                n: "yolov8n.pt"
-                s: "yolov8s.pt"
-                m: "yolov8m.pt"
-                l: "yolov8l.pt"
-                x: "yolov8x.pt"
+                n: "yolov26n.pt"
+                s: "yolo26s.pt"
+                m: "yolov26m.pt"
+                l: "yolov26l.pt"
+                x: "yolov26x.pt"
         tracking:
             track_high_thresh: 0.30
             track_low_thresh: 0.15
@@ -35,12 +35,12 @@ models:
         # ACTIVE CHECKPOINTS
         # Set these to whichever dataset you want to use right now.
         checkpoints:
-            sparta_c: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/CTD.pth.tar"
+            sparta_c: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/results-sparta-c/checkpoint_best.pth.tar"
             eer_threshold_c: 0.03000000000000001
-            sparta_f: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/FTD.pth.tar"
+            sparta_f: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/results-sparta-f/checkpoint_best.pth.tar"
             eer_threshold_f: 0.0644547895546187
-            sparta_h_c: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/CTD.pth.tar"
-            sparta_h_f: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/FTD.pth.tar"
+            sparta_h_c: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/results-sparta-c/checkpoint_best.pth.tar"
+            sparta_h_f: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/results-sparta-f/checkpoint_best.pth.tar"
 
         # PRESET STORAGE ONLY
         # Current pipeline does not switch these automatically unless UI code maps them.
@@ -48,8 +48,8 @@ models:
             CHAD:
                 ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/CTD.pth.tar"
                 ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/FTD.pth.tar"
-                eer_threshold_c: 0.03000000000000001
-                eer_threshold_f: 0.0644547895546187
+                eer_threshold_c: 0.25
+                eer_threshold_f: 0.40
 
             NWPUC:
                 ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/NWPUC/CTD.pth.tar"
@@ -105,3 +105,12 @@ inference:
     no_metrics: save
     save_results: save
     save_results_dir: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/evaluation_results_sparta"
+
+runtime:
+    resize_width: 1280
+    resize_height: 720
+    capture_buffer_size: 2
+    use_fp16: true
+    min_pose_bbox_area: 2500
+    pose_every_n_frames: 3
+    sparta_every_n_frames: 5
