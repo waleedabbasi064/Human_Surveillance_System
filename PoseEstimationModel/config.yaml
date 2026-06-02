@@ -112,10 +112,11 @@ inference:
     save_results_dir: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/evaluation_results_sparta"
 
 runtime:
-    resize_width: 1280
-    resize_height: 720
+    resize_width: 640
+    resize_height: 360
     capture_buffer_size: 2
     use_fp16: true
     min_pose_bbox_area: 2500
     pose_every_n_frames: 3
     sparta_every_n_frames: 5
+    max_tracks_per_frame: 8

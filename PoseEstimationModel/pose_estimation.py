@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import colorsys
 import os
@@ -220,6 +221,7 @@ class Config:
         cfg.setdefault("min_pose_bbox_area", 2500)
         cfg.setdefault("pose_every_n_frames", 3)
         cfg.setdefault("sparta_every_n_frames", 5)
+        cfg.setdefault("max_tracks_per_frame", 8)
         cfg.setdefault("pose_match_iou", 0.05)
         return cfg
 
@@ -234,6 +236,7 @@ class Config:
         pose_root = self.resolve(raw_paths.get("pose_output_dir") or "../pose_outputs")
         paths["pose_output_dir"] = pose_root
         paths["pose_video_dir"] = pose_root / "pose_vis"
+        paths["sparta_output_dir"] = self.resolve(raw_paths.get("sparta_output_dir") or "../evaluation_results_sparta")
         return paths
 
     @property
@@ -661,6 +664,7 @@ class PosePipeline:
         self.paths = self.config.resolved_paths()
         self.last_anomaly_records: List[Dict[str, Any]] = []
         self.last_pose_json_path: Optional[Path] = None
+        self.last_scores_csv_path: Optional[Path] = None
 
     # Inside PosePipeline class in pose_estimation.py
 
@@ -678,6 +682,8 @@ class PosePipeline:
         cap.set(cv2.CAP_PROP_BUFFERSIZE, int(self.config.runtime_cfg.get("capture_buffer_size", 2)))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+        frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or int(self.config.runtime_cfg.get("resize_width", 1280) or 1280)
+        frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or int(self.config.runtime_cfg.get("resize_height", 720) or 720)
         runtime_cfg = self.config.runtime_cfg
         pose_every_n = max(1, int(runtime_cfg.get("pose_every_n_frames", 1) or 1))
         sparta_every_n = max(1, int(runtime_cfg.get("sparta_every_n_frames", 1) or 1))
@@ -697,10 +703,13 @@ class PosePipeline:
             estimator = MMPoseTopDownEstimator(self.config, pose_paths)
         
         # --- SPARTA Anomaly Detection Setup ---
+        sparta_branch = "SPARTA_C"
+        sparta_threshold = 0.5
         try:
             from utils.tokenizer import Tokenizer
             from models import SPARTA_C, SPARTA_F, SPARTA_H
             from utils.train_utils import CostumLoss
+            from utils.data_utils import normalize_pose
             
             sparta_cfg = self.config.cfg.get("models", {}).get("sparta", {})
             seg_len = int(sparta_cfg.get("seg_len", 24))
@@ -724,45 +733,63 @@ class PosePipeline:
             th_f = float(sparta_cfg.get("checkpoints", {}).get("eer_threshold_f", 0.5))
             th_h = float(sparta_cfg.get("checkpoints", {}).get("eer_threshold_h", max(th_c, th_f)))
             
-            # Build SPARTA model
+            # Build SPARTA model. The live path must match the checkpoint d_model exactly.
             expand_ratio = 2 if relative else 1
-            input_dim = num_kp * 2
+            configured_d_model = num_kp * 2 * expand_ratio
             num_heads = int(sparta_cfg.get("model_num_heads", 2))
             latent_dim = int(sparta_cfg.get("model_latent_dim", 64))
             dropout = float(sparta_cfg.get("dropout", 0.3))
+            sparta_feature_dim = configured_d_model
+
+            def load_checkpoint_state(checkpoint_path: str) -> Dict[str, Any] | None:
+                if not checkpoint_path or not Path(checkpoint_path).exists():
+                    return None
+                checkpoint = torch.load(checkpoint_path, map_location="cpu")
+                return checkpoint.get("state_dict", checkpoint)
+
+            def infer_d_model(state_dict: Dict[str, Any] | None, fallback: int) -> int:
+                if not state_dict:
+                    return fallback
+                for key, value in state_dict.items():
+                    if key.endswith("self_attn.in_proj_weight") and hasattr(value, "shape") and len(value.shape) == 2:
+                        return int(value.shape[1])
+                return fallback
             
             if sparta_branch == "SPARTA_C":
-                sparta_model = SPARTA_C(input_dim * expand_ratio, num_heads, latent_dim, 4, 1000, device=device, dropout=dropout)
-                if ckpt_c and Path(ckpt_c).exists():
-                    ckpt = torch.load(ckpt_c, map_location=device)
-                    sparta_model.load_state_dict(ckpt['state_dict'])
-                    print(f"[SPARTA] Loaded SPARTA_C from {ckpt_c}")
+                state_c = load_checkpoint_state(ckpt_c)
+                sparta_feature_dim = infer_d_model(state_c, configured_d_model)
+                sparta_model = SPARTA_C(sparta_feature_dim, num_heads, latent_dim, 4, 1000, device=device, dropout=dropout)
+                if state_c:
+                    sparta_model.load_state_dict(state_c)
+                    print(f"[SPARTA] Loaded SPARTA_C from {ckpt_c} | d_model={sparta_feature_dim}")
                 sparta_model.to(device)
                 sparta_model.eval()
                 sparta_threshold = th_c
                 sparta_tokenizer = Tokenizer(Namespace(branch="SPARTA_C", device=device, relative=relative, token_config="t", traj=False, num_kp=num_kp))
                 loss_func = CostumLoss("MSE", a=1, b=1, c=1, d=1)
             elif sparta_branch == "SPARTA_F":
-                sparta_model = SPARTA_F(input_dim * expand_ratio, num_heads, latent_dim, 4, 1000, device=device)
-                if ckpt_f and Path(ckpt_f).exists():
-                    ckpt = torch.load(ckpt_f, map_location=device)
-                    sparta_model.load_state_dict(ckpt['state_dict'])
-                    print(f"[SPARTA] Loaded SPARTA_F from {ckpt_f}")
+                state_f = load_checkpoint_state(ckpt_f)
+                sparta_feature_dim = infer_d_model(state_f, configured_d_model)
+                sparta_model = SPARTA_F(sparta_feature_dim, num_heads, latent_dim, 4, 1000, device=device)
+                if state_f:
+                    sparta_model.load_state_dict(state_f)
+                    print(f"[SPARTA] Loaded SPARTA_F from {ckpt_f} | d_model={sparta_feature_dim}")
                 sparta_model.to(device)
                 sparta_model.eval()
                 sparta_threshold = th_f
                 sparta_tokenizer = Tokenizer(Namespace(branch="SPARTA_F", device=device, relative=relative, token_config="t", traj=False, num_kp=num_kp))
                 loss_func = CostumLoss("MSE", a=1, b=1, c=1, d=1)
             elif sparta_branch == "SPARTA_H":
-                sparta_model = SPARTA_H(input_dim * expand_ratio, num_heads, latent_dim, 4, 1000, device=device, dropout=dropout)
-                if ckpt_h_c and Path(ckpt_h_c).exists():
-                    ckpt = torch.load(ckpt_h_c, map_location=device)
-                    sparta_model.CTD.load_state_dict(ckpt['state_dict'])
-                    print(f"[SPARTA] Loaded SPARTA_H CTD from {ckpt_h_c}")
-                if ckpt_h_f and Path(ckpt_h_f).exists():
-                    ckpt = torch.load(ckpt_h_f, map_location=device)
-                    sparta_model.FTD.load_state_dict(ckpt['state_dict'])
-                    print(f"[SPARTA] Loaded SPARTA_H FTD from {ckpt_h_f}")
+                state_c = load_checkpoint_state(ckpt_h_c)
+                state_f = load_checkpoint_state(ckpt_h_f)
+                sparta_feature_dim = infer_d_model(state_c, infer_d_model(state_f, configured_d_model))
+                sparta_model = SPARTA_H(sparta_feature_dim, num_heads, latent_dim, 4, 1000, device=device, dropout=dropout)
+                if state_c:
+                    sparta_model.CTD.load_state_dict(state_c)
+                    print(f"[SPARTA] Loaded SPARTA_H CTD from {ckpt_h_c} | d_model={sparta_feature_dim}")
+                if state_f:
+                    sparta_model.FTD.load_state_dict(state_f)
+                    print(f"[SPARTA] Loaded SPARTA_H FTD from {ckpt_h_f} | d_model={sparta_feature_dim}")
                 sparta_model.to(device)
                 sparta_model.eval()
                 sparta_threshold = th_h
@@ -773,177 +800,275 @@ class PosePipeline:
                 sparta_tokenizer = None
                 sparta_threshold = 0.5
                 loss_func = None
+
+            if sparta_model is not None:
+                feature_multiplier = 4 if relative else 2
+                inferred_num_kp = max(1, sparta_feature_dim // feature_multiplier)
+                if inferred_num_kp != num_kp:
+                    print(f"[SPARTA] Adjusting live keypoints from config num_kp={num_kp} to checkpoint num_kp={inferred_num_kp}")
+                    num_kp = inferred_num_kp
             
+            sparta_window_len = seg_len * 2 if sparta_branch in {"SPARTA_F", "SPARTA_H"} else seg_len
             sparta_enabled = sparta_model is not None
         except Exception as e:
             print(f"[WARNING] SPARTA loading failed: {e}. Proceeding without anomaly detection.")
             sparta_enabled = False
             sparta_model = None
             sparta_tokenizer = None
+            sparta_window_len = int(self.config.cfg.get("models", {}).get("sparta", {}).get("seg_len", 24))
         
         frame_id = 0
         sparta_json = defaultdict(dict)
         self.last_anomaly_records = []
         self.last_pose_json_path = None
+        self.last_scores_csv_path = None
+        source_text = str(p["input_video"])
+        source_stem = "camera0" if source_text.startswith("__camera__:") else Path(source_text).stem
+
+        # Live score CSV: written while frames are processed, not after a second scoring pass.
+        p["sparta_output_dir"].mkdir(parents=True, exist_ok=True)
+        score_fieldnames = [
+            "segment",
+            "timeline_index",
+            "scene_id",
+            "clip_id",
+            "person_id",
+            "start_frame",
+            "score",
+            "predicted",
+        ]
+        branch_slug = str(sparta_branch).lower()
+        scores_csv_path = p["sparta_output_dir"] / f"{branch_slug}_scores.csv"
+        score_file = scores_csv_path.open("w", newline="", encoding="utf-8")
+        score_writer = csv.DictWriter(score_file, fieldnames=score_fieldnames)
+        score_writer.writeheader()
+        self.last_scores_csv_path = scores_csv_path
+        segment_index = 0
+        scene_digits = "".join(re.findall(r"\d+", self.config.static_prefix))
+        scene_id = int(scene_digits) if scene_digits else 1
+        clip_digits = "".join(re.findall(r"\d+", source_stem))
+        clip_id = int(clip_digits[-4:]) if clip_digits else 0
+        max_tracks_per_frame = int(runtime_cfg.get("max_tracks_per_frame", 8) or 0)
         
         # Rolling buffers: per-person keypoint sequences for SPARTA
         per_person_kpts = defaultdict(list)  # {person_id: [(frame_id, keypoints_array), ...]}
-        per_person_anomaly = defaultdict(lambda: defaultdict(lambda: 0))  # {person_id: {frame_id: 0/1}}
+        latest_anomaly_by_track = defaultdict(lambda: 0)  # Persist last SPARTA decision between skipped frames.
+        latest_score_by_track = defaultdict(lambda: 0.0)
         cached_pose_by_track: Dict[int, Dict[str, Any]] = {}
         
-        with tqdm(total=total_frames, desc="Processing") as pbar:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                
-                # --- STEP 1: Detection & Tracking (unified) ---
-                det_kwargs = {"conf": detector.conf, "iou": detector.iou, "verbose": False, "device": detector.device}
-                if detector.classes:
-                    det_kwargs["classes"] = detector.classes
-                
-                frame_runtime, sx, sy = _resize_frame_if_needed(frame, runtime_cfg)
-                if str(detector.device).startswith("cuda") and bool(runtime_cfg.get("use_fp16", False)):
-                    det_kwargs["half"] = True
-                with torch.inference_mode():
-                    results_list = detector.model(frame_runtime, **det_kwargs)
-                if isinstance(results_list, list) and len(results_list) > 0:
-                    results = results_list[0]
-                else:
-                    results = results_list
-                
-                # Extract boxes
-                if hasattr(results, 'boxes') and results.boxes is not None:
-                    boxes = results.boxes.cpu()
-                else:
-                    boxes = Boxes(torch.zeros((0, 6)), frame.shape[:2])
-                
-                # Update tracker with detected boxes
-                tracks = tracker.update(boxes, frame_runtime)
-                
-                # --- STEP 2: Pose Estimation ---
-                refresh_pose = (frame_id % pose_every_n == 0)
-                yolo_pose_candidates = None
-                if isinstance(estimator, YoloPoseEstimator) and refresh_pose:
-                    yolo_result = estimator._infer_full_frame(frame_runtime)
-                    yolo_pose_candidates = estimator._extract_pose_candidates(yolo_result, sx=sx, sy=sy)
+        def normalize_keypoint_count(kpts_array: np.ndarray) -> np.ndarray:
+            if kpts_array.shape[0] == num_kp:
+                return kpts_array
+            if kpts_array.shape[0] > num_kp:
+                return kpts_array[:num_kp]
+            pad = np.zeros((num_kp - kpts_array.shape[0], kpts_array.shape[1]), dtype=np.float32)
+            return np.concatenate([kpts_array, pad], axis=0)
 
-                for t in tracks:
-                    if len(t) >= 5:
+        def build_sparta_window(recent_frames: list[tuple[int, np.ndarray]]) -> np.ndarray:
+            batch_kpts = np.array([kpt_arr for _, kpt_arr in recent_frames], dtype=np.float32)  # (T, V, 3)
+            batch_kpts = normalize_pose(
+                batch_kpts[None, ...],
+                vid_res=[frame_width, frame_height],
+                traj=False,
+            ).squeeze(0)  # (T, V, 3), same scale as offline dataset
+            data = batch_kpts.transpose(2, 0, 1)[:2]  # (C=2, T, V)
+            if relative:
+                relative_movement = np.zeros_like(data)
+                for time_idx in range(1, data.shape[1]):
+                    relative_movement[:, time_idx, :] = data[:, time_idx, :] - data[:, 0, :]
+                data = np.concatenate((data, relative_movement), axis=2)  # (2, T, 2V)
+            return data.transpose(1, 0, 2).reshape(data.shape[1], -1)  # token_config='t': (T, C*V)
+
+        try:
+            with tqdm(total=total_frames, desc="Processing") as pbar:
+                while True:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    
+                    # --- STEP 1: Detection & Tracking (unified) ---
+                    det_kwargs = {"conf": detector.conf, "iou": detector.iou, "verbose": False, "device": detector.device}
+                    if detector.classes:
+                        det_kwargs["classes"] = detector.classes
+                    
+                    frame_runtime, sx, sy = _resize_frame_if_needed(frame, runtime_cfg)
+                    if str(detector.device).startswith("cuda") and bool(runtime_cfg.get("use_fp16", False)):
+                        det_kwargs["half"] = True
+                    with torch.inference_mode():
+                        results_list = detector.model(frame_runtime, **det_kwargs)
+                    if isinstance(results_list, list) and len(results_list) > 0:
+                        results = results_list[0]
+                    else:
+                        results = results_list
+                    
+                    if hasattr(results, "boxes") and results.boxes is not None:
+                        boxes = results.boxes.cpu()
+                    else:
+                        boxes = Boxes(torch.zeros((0, 6)), frame.shape[:2])
+                    
+                    tracks = tracker.update(boxes, frame_runtime)
+                    track_items = []
+                    for t in tracks:
+                        if len(t) < 5:
+                            continue
                         x1, y1, x2, y2 = t[:4]
                         track_id = int(t[4])
-                        
-                        # Extract bbox and run pose estimation
                         if sx != 1.0 or sy != 1.0:
                             x1, x2 = x1 / sx, x2 / sx
                             y1, y2 = y1 / sy, y2 / sy
                         bbox = [float(x1), float(y1), float(x2), float(y2)]
-                        if min_bbox_area > 0 and _bbox_area_xyxy(bbox) < min_bbox_area:
+                        area = _bbox_area_xyxy(bbox)
+                        if min_bbox_area > 0 and area < min_bbox_area:
                             continue
-                        
+                        track_items.append((area, track_id, bbox))
+                    if max_tracks_per_frame > 0 and len(track_items) > max_tracks_per_frame:
+                        track_items = sorted(track_items, key=lambda item: item[0], reverse=True)[:max_tracks_per_frame]
+                    
+                    # --- STEP 2: Pose Estimation ---
+                    # Strict real-time rule: estimate pose only on refresh frames; otherwise reuse cache.
+                    refresh_pose = frame_id % pose_every_n == 0
+                    yolo_pose_candidates = None
+                    refreshed_pose_by_track: Dict[int, Dict[str, Any]] = {}
+
+                    if refresh_pose and isinstance(estimator, YoloPoseEstimator):
+                        yolo_result = estimator._infer_full_frame(frame_runtime)
+                        yolo_pose_candidates = estimator._extract_pose_candidates(yolo_result, sx=sx, sy=sy)
+                    elif refresh_pose and isinstance(estimator, MMPoseTopDownEstimator) and track_items:
+                        batch_frame = frame_runtime if (sx != 1.0 or sy != 1.0) else frame
+                        batch_bboxes = [
+                            _scale_bbox_xyxy(bbox, sx, sy) if (sx != 1.0 or sy != 1.0) else bbox
+                            for _, _, bbox in track_items
+                        ]
+                        batch_poses = estimator._estimate_batch(batch_frame, batch_bboxes)
+                        for (_, track_id, _), pose in zip(track_items, batch_poses):
+                            if pose and (sx != 1.0 or sy != 1.0):
+                                for triplet in pose["keypoints"]:
+                                    triplet[0] /= sx
+                                    triplet[1] /= sy
+                            if pose and pose.get("mean", 0) >= estimator.conf_threshold:
+                                refreshed_pose_by_track[track_id] = pose
+                                cached_pose_by_track[track_id] = pose
+
+                    draw_items = []
+                    pending_sparta_batch = []
+                    for _, track_id, bbox in track_items:
                         pose = None
-                        if refresh_pose or track_id not in cached_pose_by_track:
+                        if refresh_pose:
                             if isinstance(estimator, YoloPoseEstimator):
                                 pose = estimator._match_candidate_to_bbox(yolo_pose_candidates or [], bbox)
+                                if pose and pose.get("mean", 0) >= estimator.conf_threshold:
+                                    cached_pose_by_track[track_id] = pose
+                            elif isinstance(estimator, MMPoseTopDownEstimator):
+                                pose = refreshed_pose_by_track.get(track_id)
                             else:
-                                pose = estimator._estimate(frame_runtime if (sx != 1.0 or sy != 1.0) else frame, _scale_bbox_xyxy(bbox, sx, sy) if (sx != 1.0 or sy != 1.0) else bbox)
-                                if pose and (sx != 1.0 or sy != 1.0):
-                                    for triplet in pose["keypoints"]:
-                                        triplet[0] /= sx
-                                        triplet[1] /= sy
-                            if pose and pose.get("mean", 0) >= estimator.conf_threshold:
-                                cached_pose_by_track[track_id] = pose
+                                pose = cached_pose_by_track.get(track_id)
                         else:
                             pose = cached_pose_by_track.get(track_id)
 
-                        if pose and pose.get("mean", 0) >= estimator.conf_threshold:
-                            # Store keypoints
-                            flat = [c for trip in pose["keypoints"] for c in trip]
-                            sparta_json[str(track_id)][str(frame_id)] = {
-                                "keypoints": flat,
-                                "scores": float(pose["mean"])
-                            }
-                            
-                            anomaly_score = 0.0
-                            pred = 0
-                            # --- STEP 3: SPARTA Anomaly Detection (rolling buffer) ---
-                            if sparta_enabled and len(pose["keypoints"]) > 0:
-                                kpts_array = np.array([k[:2] for k in pose["keypoints"]], dtype=np.float32)  # (num_kp, 2)
-                                per_person_kpts[track_id].append((frame_id, kpts_array))
-                                
-                                # Keep only recent seg_len frames
-                                if len(per_person_kpts[track_id]) > seg_len + 10:
-                                    per_person_kpts[track_id] = per_person_kpts[track_id][-(seg_len + 5):]
-                                
-                                # Run SPARTA inference when buffer has at least seg_len frames
-                                if len(per_person_kpts[track_id]) >= seg_len and frame_id % sparta_every_n == 0:
-                                    # Prepare batch data from recent seg_len frames
-                                    recent_frames = per_person_kpts[track_id][-seg_len:]
-                                    batch_kpts = np.array([kpt_arr for _, kpt_arr in recent_frames], dtype=np.float32)  # (seg_len, num_kp, 2)
-                                    
-                                    # Handle relative coordinates if enabled
-                                    if relative and len(batch_kpts) > 1:
-                                        abs_kpts = batch_kpts.copy()
-                                        rel_kpts = batch_kpts.copy()
-                                        for t_ in range(1, len(batch_kpts)):
-                                            rel_kpts[t_] = batch_kpts[t_] - batch_kpts[t_ - 1]
-                                        batch_kpts = np.concatenate([abs_kpts, rel_kpts], axis=1)  # (seg_len, num_kp*2, 2)
-                                    
-                                    # Convert to tensor: (1, channels=2, seg_len, num_kp)
-                                    kpts_tensor = torch.from_numpy(batch_kpts.transpose(2, 0, 1)).unsqueeze(0).to(device, dtype=torch.float32)
-                                    
-                                    try:
-                                        with torch.inference_mode():
-                                            if sparta_branch == "SPARTA_C":
-                                                recon = sparta_model.forward(kpts_tensor, kpts_tensor)
-                                                loss = loss_func.calculate(kpts_tensor, recon)
-                                            elif sparta_branch == "SPARTA_F":
-                                                pred = sparta_model.forward(kpts_tensor, kpts_tensor)
-                                                loss = loss_func.calculate(kpts_tensor, pred)
-                                            else:  # SPARTA_H
-                                                ctd_out, ftd_out = sparta_model.forward(kpts_tensor, kpts_tensor)
-                                                loss_c = loss_func.calculate(kpts_tensor, ctd_out)
-                                                loss_f = loss_func.calculate(kpts_tensor, ftd_out)
-                                                loss = (loss_c + loss_f) * 0.5
-                                            
-                                            anomaly_score = float(loss.cpu().numpy())
-                                            pred = 1 if anomaly_score > sparta_threshold else 0
-                                            
-                                            # Store prediction for the most recent frame in the buffer
-                                            most_recent_fid = recent_frames[-1][0]
-                                            per_person_anomaly[track_id][most_recent_fid] = pred
-                                    except Exception as e:
-                                        print(f"[SPARTA] Inference error for person {track_id}: {e}")
-                            
-                            # Save record for this person/frame
-                            self.last_anomaly_records.append({
-                                "frame_id": frame_id,
-                                "person_id": track_id,
-                                "anomaly_score": anomaly_score,
-                                "anomaly_pred": int(pred),
-                            })
-                            
-                            # --- STEP 4: Visualization with anomaly coloring ---
-                            anomaly_pred = per_person_anomaly[track_id].get(frame_id, 0)
-                            frame = self._draw_pose_on_frame(
-                                frame,
-                                pose,
-                                estimator,
-                                bbox=bbox,
-                                track_id=track_id,
-                                is_anomaly=(anomaly_pred == 1),
+                        if not pose or pose.get("mean", 0) < estimator.conf_threshold:
+                            continue
+
+                        flat = [c for trip in pose["keypoints"] for c in trip]
+                        sparta_json[str(track_id)][str(frame_id)] = {
+                            "keypoints": flat,
+                            "scores": float(pose["mean"]),
+                        }
+                        draw_items.append((pose, bbox, track_id))
+
+                        if sparta_enabled and len(pose["keypoints"]) > 0:
+                            kpts_array = np.array(
+                                [[k[0], k[1], k[2] if len(k) > 2 else 1.0] for k in pose["keypoints"]],
+                                dtype=np.float32,
                             )
-                
-                # --- STEP 5: Yield processed frame to Streamlit ---
-                yield frame, frame_id, total_frames
-                frame_id += 1
-                pbar.update(1)
-        
-        cap.release()
+                            kpts_array = normalize_keypoint_count(kpts_array)
+                            per_person_kpts[track_id].append((frame_id, kpts_array))
+                            if len(per_person_kpts[track_id]) > sparta_window_len + 10:
+                                per_person_kpts[track_id] = per_person_kpts[track_id][-(sparta_window_len + 5):]
+                            if len(per_person_kpts[track_id]) >= sparta_window_len and frame_id % sparta_every_n == 0:
+                                recent_frames = per_person_kpts[track_id][-sparta_window_len:]
+                                pending_sparta_batch.append(
+                                    {
+                                        "track_id": track_id,
+                                        "start_frame": int(recent_frames[0][0]),
+                                        "model_input": build_sparta_window(recent_frames),
+                                    }
+                                )
+
+                    # --- STEP 3: Batched SPARTA Anomaly Detection for all eligible people in this frame ---
+                    if pending_sparta_batch and sparta_enabled:
+                        try:
+                            batch_np = np.stack([item["model_input"] for item in pending_sparta_batch], axis=0)
+                            kpts_tensor = torch.from_numpy(batch_np).to(device, dtype=torch.float32)
+                            with torch.inference_mode():
+                                if sparta_branch == "SPARTA_C":
+                                    recon = sparta_model.forward(kpts_tensor, kpts_tensor)
+                                    loss_values = torch.mean((kpts_tensor - recon) ** 2, dim=tuple(range(1, kpts_tensor.ndim)))
+                                elif sparta_branch == "SPARTA_F":
+                                    input_tensor = kpts_tensor[:, :seg_len, :]
+                                    target_tensor = kpts_tensor[:, seg_len:seg_len * 2, :]
+                                    pred_tensor = sparta_model.forward(input_tensor, target_tensor)
+                                    loss_values = torch.mean((target_tensor - pred_tensor) ** 2, dim=tuple(range(1, target_tensor.ndim)))
+                                else:  # SPARTA_H
+                                    input_tensor = kpts_tensor[:, :seg_len, :]
+                                    target_tensor = kpts_tensor[:, seg_len:seg_len * 2, :]
+                                    ctd_out, ftd_out = sparta_model.forward(input_tensor, target_tensor)
+                                    loss_c = torch.mean((input_tensor - ctd_out) ** 2, dim=tuple(range(1, input_tensor.ndim)))
+                                    loss_f = torch.mean((target_tensor - ftd_out) ** 2, dim=tuple(range(1, target_tensor.ndim)))
+                                    loss_values = (loss_c + loss_f) * 0.5
+                            for item, score_value in zip(pending_sparta_batch, loss_values.detach().cpu().numpy().reshape(-1)):
+                                score = float(score_value)
+                                pred = int(score >= sparta_threshold)
+                                track_id = int(item["track_id"])
+                                latest_score_by_track[track_id] = score
+                                latest_anomaly_by_track[track_id] = pred
+                                score_writer.writerow(
+                                    {
+                                        "segment": segment_index,
+                                        "timeline_index": segment_index,
+                                        "scene_id": scene_id,
+                                        "clip_id": clip_id,
+                                        "person_id": track_id,
+                                        "start_frame": int(item["start_frame"]),
+                                        "score": score,
+                                        "predicted": pred,
+                                    }
+                                )
+                                segment_index += 1
+                            score_file.flush()
+                        except Exception as e:
+                            print(f"[SPARTA] Batched inference error at frame {frame_id}: {e}")
+
+                    # --- STEP 4: Lightweight visualization with latest live score state ---
+                    for pose, bbox, track_id in draw_items:
+                        current_anomaly_pred = int(latest_anomaly_by_track.get(track_id, 0))
+                        current_score = float(latest_score_by_track.get(track_id, 0.0))
+                        self.last_anomaly_records.append(
+                            {
+                                "frame_id": frame_id,
+                                "person_id": int(track_id),
+                                "anomaly_score": current_score,
+                                "anomaly_pred": current_anomaly_pred,
+                            }
+                        )
+                        frame = self._draw_pose_on_frame(
+                            frame,
+                            pose,
+                            estimator,
+                            bbox=bbox,
+                            track_id=track_id,
+                            is_anomaly=(current_anomaly_pred == 1),
+                        )
+                    
+                    yield frame, frame_id, total_frames
+                    frame_id += 1
+                    pbar.update(1)
+        finally:
+            score_file.close()
+            cap.release()
         
         # Save the final JSON after all frames processed
         p["pose_output_dir"].mkdir(parents=True, exist_ok=True)
-        out_name = self.config.human_centric_filename(Path(p["input_video"]).stem)
+        out_name = self.config.human_centric_filename(source_stem)
         final_path = p["pose_output_dir"] / out_name
         with open(final_path, "w") as f:
             json.dump(sparta_json, f, indent=2)
@@ -1002,19 +1127,17 @@ class PosePipeline:
         return {"keypoints": triplets, "mean": float(confs.mean())}
 
     def _draw_pose_on_frame(self, frame, pose, estimator, bbox: Optional[list[float]] = None, track_id: Optional[int] = None, is_anomaly: bool = False):
-        """Draw skeleton, keypoints, bounding box, and ID on frame. Red color if anomaly detected."""
-        # Use red if anomaly, otherwise use estimator color
-        if is_anomaly:
-            color = (0, 0, 255)  # Red in BGR
-        else:
-            color = estimator._vis_color if hasattr(estimator, '_vis_color') else (0, 255, 0)
+        """Draw lightweight real-time skeleton overlay. Red means anomaly, green means normal."""
+        color = (0, 0, 255) if is_anomaly else (0, 255, 0)  # BGR: red anomaly, green normal
         
         kpts = pose["keypoints"]
-        min_kpt_conf = estimator.min_kpt_conf if hasattr(estimator, 'min_kpt_conf') else 0.3
-        line_thickness = max(1, estimator._vis_line_thickness if hasattr(estimator, '_vis_line_thickness') else 2)
-        kpt_radius = estimator._vis_kpt_radius if hasattr(estimator, '_vis_kpt_radius') else 3
+        min_kpt_conf = estimator.min_kpt_conf if hasattr(estimator, "min_kpt_conf") else 0.3
+        line_thickness = max(1, min(2, estimator._vis_line_thickness if hasattr(estimator, "_vis_line_thickness") else 1))
+        kpt_radius = max(1, min(3, estimator._vis_kpt_radius if hasattr(estimator, "_vis_kpt_radius") else 2))
+        runtime_cfg = getattr(getattr(estimator, "cfg", None), "runtime_cfg", {}) or {}
+        draw_bbox = bool(runtime_cfg.get("draw_bbox", False))
+        draw_labels = bool(runtime_cfg.get("draw_labels", False))
         
-        # Draw skeleton lines
         for start_idx, end_idx in SKELETON_CONNECTIONS:
             if start_idx < len(kpts) and end_idx < len(kpts):
                 x1, y1, s1 = kpts[start_idx]
@@ -1022,26 +1145,19 @@ class PosePipeline:
                 if s1 >= min_kpt_conf and s2 >= min_kpt_conf:
                     cv2.line(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, line_thickness, lineType=cv2.LINE_AA)
         
-        # Draw keypoint dots
         for (x, y, s) in kpts:
             if s >= min_kpt_conf:
                 cv2.circle(frame, (int(x), int(y)), kpt_radius, color, -1, lineType=cv2.LINE_AA)
 
-        if bbox is not None:
+        if bbox is not None and (draw_bbox or draw_labels):
             x1, y1, x2, y2 = [int(round(v)) for v in bbox]
-            cv2.rectangle(frame, (x1, y1), (x2, y2), color, line_thickness, lineType=cv2.LINE_AA)
-            if track_id is not None:
+            if draw_bbox:
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, line_thickness, lineType=cv2.LINE_AA)
+            if draw_labels and track_id is not None:
                 label = f"ID:{track_id}"
                 text_pos = (x1, max(y1 - 6, 12))
-                cv2.putText(frame, label, text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 2, lineType=cv2.LINE_AA)
-                cv2.putText(frame, label, text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, lineType=cv2.LINE_AA)
-                
-                # Add anomaly indicator if detected
-                if is_anomaly:
-                    anomaly_label = "ANOMALY"
-                    anomaly_pos = (x1, max(y1 - 20, 12))
-                    cv2.putText(frame, anomaly_label, anomaly_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 0), 2, lineType=cv2.LINE_AA)
-                    cv2.putText(frame, anomaly_label, anomaly_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1, lineType=cv2.LINE_AA)
+                cv2.putText(frame, label, text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 0), 2, lineType=cv2.LINE_AA)
+                cv2.putText(frame, label, text_pos, cv2.FONT_HERSHEY_SIMPLEX, 0.35, color, 1, lineType=cv2.LINE_AA)
         
         return frame
 

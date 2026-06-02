@@ -14,19 +14,31 @@ from typing import Any, Dict, Tuple
 # Local pipeline imports
 from PoseEstimationModel.pose_estimation import Config, PosePipeline
 
-# --------- Constants & helpers ---------
 
 BASE_DIR = Path(__file__).parent
 POSE_DIR = BASE_DIR / "PoseEstimationModel"
 BASE_CONFIG_PATH = POSE_DIR / "config.yaml"
+DEFAULT_CONFIG_PATH = BASE_DIR / "config" / "default.yaml"
 UPLOAD_DIR = POSE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
 
+def load_yaml_cfg(path: Path) -> Dict:
+    if not path.exists():
+        return {}
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
 def load_base_cfg() -> Dict:
-    with open(BASE_CONFIG_PATH, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    return load_yaml_cfg(BASE_CONFIG_PATH)
+
+
+def load_default_cfg() -> Dict:
+    return load_yaml_cfg(DEFAULT_CONFIG_PATH)
+
 
 BASE_CFG = load_base_cfg()
+DEFAULT_CFG = load_default_cfg()
 POSE_WEIGHTS = BASE_CFG["models"]["pose"].get("weights", {})
 DET_WEIGHTS = BASE_CFG["models"]["detection"].get("weights", {})
 SPARTA_CFG = BASE_CFG.get("models", {}).get("sparta", {})
@@ -36,6 +48,39 @@ SPARTA_WEIGHTSETS = {
     for key, value in SPARTA_CFG.items()
     if isinstance(value, dict) and ("ctd" in value or "ftd" in value)
 }
+
+
+def cfg_float(cfg: Dict, key: str, fallback: float | None = None) -> float | None:
+    value = cfg.get(key, fallback)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def branch_to_display(branch: str | None) -> str:
+    return {
+        "SPARTA_C": "SPARTA-C",
+        "SPARTA_F": "SPARTA-F",
+        "SPARTA_H": "SPARTA-H",
+    }.get(str(branch or "").strip(), "SPARTA-C")
+
+
+def infer_weightset_from_default() -> str:
+    default_paths = [
+        str(DEFAULT_CFG.get("model_ckpt_dir") or ""),
+        str(DEFAULT_CFG.get("model_ckpt_C") or ""),
+        str(DEFAULT_CFG.get("model_ckpt_F") or ""),
+    ]
+    for name, block in SPARTA_WEIGHTSETS.items():
+        candidates = [str(block.get("ctd") or ""), str(block.get("ftd") or "")]
+        if any(path_value and path_value in candidates for path_value in default_paths):
+            return name
+    if SPARTA_WEIGHTSETS:
+        return next(iter(SPARTA_WEIGHTSETS.keys()))
+    return ""
 
 def variants_for(family: str) -> Tuple[str, ...]:
     block = POSE_WEIGHTS.get(family, {})
@@ -88,21 +133,37 @@ def build_person_score_figure(df: pd.DataFrame, threshold: float | None = None):
     frame["score"] = pd.to_numeric(frame["score"], errors="coerce")
     frame = frame.dropna(subset=[x_col, "score"]).sort_values(["person_id", x_col])
 
-    fig, ax = plt.subplots(figsize=(12, 5))
-    for person_id, group in frame.groupby("person_id"):
-        ax.plot(group[x_col], group["score"], marker='o', linewidth=1.8, markersize=3.5, label=f"ID {person_id}")
-        if "predicted" in group.columns:
-            anomaly_points = group[group["predicted"].astype(str).isin(["1", "1.0", "True", "true"])]
-            if not anomaly_points.empty:
-                ax.scatter(anomaly_points[x_col], anomaly_points["score"], color='red', s=28, marker='D', zorder=5)
-    if threshold is not None:
-        ax.axhline(float(threshold), color='red', linestyle='--', linewidth=1.3, label=f"Threshold {float(threshold):.3f}")
-    ax.set_title("Human-Centric Anomaly Scores Over Time")
-    ax.set_xlabel(x_col.replace("_", " ").title())
-    ax.set_ylabel("Anomaly Score")
-    ax.grid(True, linestyle='--', alpha=0.35)
-    ax.legend(loc='upper right', fontsize='small', ncol=2)
-    fig.tight_layout()
+    plot_threshold = float(threshold) if threshold is not None else None
+    max_score = float(frame["score"].max()) if not frame.empty else 0.0
+    scale_factor = 1.0
+    if max_score > 4.0:
+        scale_factor = max_score / 4.0
+        frame["score"] = frame["score"] / scale_factor
+        if plot_threshold is not None:
+            plot_threshold = plot_threshold / scale_factor
+
+    fig, ax = plt.subplots(figsize=(10, 3.4), dpi=120)
+    for person_id, group in frame.groupby("person_id", sort=False):
+        ax.plot(
+            group[x_col],
+            group["score"],
+            linewidth=0.9,
+            alpha=0.85,
+            label=f"ID {person_id}",
+        )
+    if plot_threshold is not None:
+        ax.axhline(plot_threshold, color="red", linestyle="--", linewidth=1.1, label=f"Threshold {float(threshold):.3f}")
+    ax.set_title("Human-Centric Anomaly Scores Over Time", fontsize=12)
+    ax.set_xlabel(x_col.replace("_", " ").title(), fontsize=9)
+    ax.set_ylabel("Anomaly Score", fontsize=9)
+    ax.set_ylim(0, 4.2)
+    ax.tick_params(axis="both", labelsize=8)
+    ax.grid(True, linestyle="--", alpha=0.25)
+    ax.margins(x=0.01)
+    ax.legend(loc="upper right", fontsize=6, ncol=4, framealpha=0.78)
+    if scale_factor > 1.0:
+        ax.text(0.01, 0.97, f"display scaled ÷ {scale_factor:.1f}", transform=ax.transAxes, fontsize=7, va="top", color="gray")
+    fig.tight_layout(pad=0.8)
     return fig
 
 
@@ -125,6 +186,12 @@ def build_run_config(
     device: str,
     video_path: Path,
     save_video: bool,
+    sparta_branch: str,
+    ckpt_c: str,
+    ckpt_f: str,
+    th_c: float | None,
+    th_f: float | None,
+    th_h: float | None,
 ) -> Dict:
     cfg = deepcopy(base_cfg)
     cfg["models"]["pose"]["name"] = pose_family
@@ -137,6 +204,23 @@ def build_run_config(
         cfg["models"]["detection"]["device"] = device
 
     cfg["models"]["pose"]["save_video"] = bool(save_video)
+    sparta_cfg = cfg.setdefault("models", {}).setdefault("sparta", {})
+    checkpoints = sparta_cfg.setdefault("checkpoints", {})
+    sparta_cfg["branch"] = sparta_branch
+    if ckpt_c:
+        checkpoints["sparta_c"] = ckpt_c
+        checkpoints["sparta_h_c"] = ckpt_c
+    if ckpt_f:
+        checkpoints["sparta_f"] = ckpt_f
+        checkpoints["sparta_h_f"] = ckpt_f
+    if th_c is not None:
+        checkpoints["eer_threshold_c"] = float(th_c)
+    if th_f is not None:
+        checkpoints["eer_threshold_f"] = float(th_f)
+    if th_h is not None:
+        checkpoints["eer_threshold_h"] = float(th_h)
+    elif th_c is not None or th_f is not None:
+        checkpoints["eer_threshold_h"] = max(float(v) for v in (th_c, th_f) if v is not None)
     cfg["paths"]["input_video"] = str(video_path)
     cfg["paths"]["static_prefix"] = "01_"
     cfg["paths"]["pose_json_suffix"] = ".json"
@@ -159,6 +243,7 @@ def build_sparta_config(
     ckpt_f: str,
     th_c: float | None,
     th_f: float | None,
+    th_h: float | None,
     pose_json_dir: Path,
     device: str,
     selected_weightset: str,
@@ -195,6 +280,7 @@ def build_sparta_config(
         sparta_cfg["model_ckpt_F"] = ckpt_f
         sparta_cfg["eer_threshold_c"] = th_c
         sparta_cfg["eer_threshold_f"] = th_f
+        sparta_cfg["eer_threshold_h"] = th_h
     else:
         sparta_cfg["model_ckpt_dir"] = ckpt_c if sparta_branch == "SPARTA_C" else ckpt_f
         if sparta_branch == "SPARTA_C":
@@ -369,12 +455,15 @@ def main():
         pose_variant_index = pose_variant_options.index(base_pose_variant) if base_pose_variant in pose_variant_options else 0
         pose_variant = st.selectbox("Pose Variant", pose_variant_options, index=pose_variant_index)
 
-        device = st.selectbox("Compute Device", ["cuda", "cpu", "auto"], index=0 if BASE_CFG["models"]["pose"].get("device", "cuda").startswith("cuda") else 1)
-        save_video = st.toggle("Generate Visualization", value=True)
+        device = BASE_CFG["models"]["pose"].get("device", "cuda") or "cuda"
+        save_video = False
 
         st.divider()
         st.subheader("SPARTA / Anomaly Model")
-        sparta_branch_display = st.selectbox("SPARTA Branch", ["SPARTA-C", "SPARTA-F", "SPARTA-H"])
+        branch_options = ["SPARTA-C", "SPARTA-F", "SPARTA-H"]
+        default_branch_display = branch_to_display(DEFAULT_CFG.get("branch", SPARTA_CFG.get("branch", "SPARTA_C")))
+        branch_index = branch_options.index(default_branch_display) if default_branch_display in branch_options else 0
+        sparta_branch_display = st.selectbox("SPARTA Branch", branch_options, index=branch_index)
         sparta_branch_map = {
             "SPARTA-C": "SPARTA_C",
             "SPARTA-F": "SPARTA_F",
@@ -383,26 +472,41 @@ def main():
         sparta_branch = sparta_branch_map.get(sparta_branch_display, sparta_branch_display)
 
         weightset_options = tuple(SPARTA_WEIGHTSETS.keys())
-        default_weightset = "IITB" if "IITB" in SPARTA_WEIGHTSETS else (weightset_options[0] if weightset_options else "")
+        default_weightset = infer_weightset_from_default()
         weightset_index = weightset_options.index(default_weightset) if default_weightset in weightset_options else 0
         selected_sparta_weightset = st.selectbox("Pretrained Weights", weightset_options, index=weightset_index)
 
         ckpt_c_default, ckpt_f_default, th_c_default, th_f_default = resolve_sparta_defaults(selected_sparta_weightset)
+        default_th_c = cfg_float(DEFAULT_CFG, "eer_threshold_c", float(th_c_default if th_c_default is not None else 0.03))
+        default_th_f = cfg_float(DEFAULT_CFG, "eer_threshold_f", float(th_f_default if th_f_default is not None else 0.06))
+        default_th_h = cfg_float(DEFAULT_CFG, "eer_threshold_h", max(v for v in [default_th_c, default_th_f] if v is not None))
+
+        threshold_c_input = st.slider("Threshold C", min_value=0.0, max_value=4.0, value=float(default_th_c or 0.0), step=0.01)
+        threshold_f_input = st.slider("Threshold F", min_value=0.0, max_value=4.0, value=float(default_th_f or 0.0), step=0.01)
+        threshold_h_input = st.slider("Threshold H", min_value=0.0, max_value=4.0, value=float(default_th_h or 0.0), step=0.01)
+
         if sparta_branch == "SPARTA_H":
             ckpt_c = ckpt_c_default
             ckpt_f = ckpt_f_default
-            th_c = float(th_c_default if th_c_default is not None else 0.03)
-            th_f = float(th_f_default if th_f_default is not None else 0.06)
+            th_c = float(threshold_c_input)
+            th_f = float(threshold_f_input)
+            th_h = float(threshold_h_input)
+            active_threshold = th_h
         elif sparta_branch == "SPARTA_F":
             ckpt_c = ""
             ckpt_f = ckpt_f_default
             th_c = None
-            th_f = float(th_f_default if th_f_default is not None else 0.06)
+            th_f = float(threshold_f_input)
+            th_h = None
+            active_threshold = th_f
         else:
             ckpt_c = ckpt_c_default
             ckpt_f = ""
             th_f = None
-            th_c = float(th_c_default if th_c_default is not None else 0.03)
+            th_c = float(threshold_c_input)
+            th_h = None
+            active_threshold = th_c
+        st.caption(f"Active threshold: {active_threshold:.3f}")
     # --- MAIN: Title and Upload ---
     st.title("🎥 Human-Centric Surveillance System")
     st.caption("Real-time pose estimation with anomaly detection")
@@ -435,7 +539,7 @@ def main():
         # Start Analysis Button
         if st.button("🚀 Start Live Analysis", use_container_width=True, type="primary"):
             # 1. Setup Config
-            run_cfg = build_run_config(BASE_CFG, pose_family, pose_variant, det_family, det_variant, device, video_path, save_video)
+            run_cfg = build_run_config(BASE_CFG, pose_family, pose_variant, det_family, det_variant, device, video_path, save_video, sparta_branch, ckpt_c, ckpt_f, th_c, th_f, th_h)
             
             with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=POSE_DIR, delete=False) as tmp:
                 yaml.safe_dump(run_cfg, tmp)
@@ -500,6 +604,7 @@ def main():
                         ckpt_f,
                         th_c,
                         th_f,
+                        th_h,
                         final_json_path.parent,
                         device,
                         selected_sparta_weightset,
@@ -518,14 +623,7 @@ def main():
                     if scores_files:
                         scores_path = scores_files[0]
                         df = pd.read_csv(scores_path)
-                        threshold_line = None
-                        if sparta_branch == "SPARTA_C":
-                            threshold_line = th_c
-                        elif sparta_branch == "SPARTA_F":
-                            threshold_line = th_f
-                        elif th_c is not None or th_f is not None:
-                            threshold_line = max([v for v in [th_c, th_f] if v is not None])
-
+                        threshold_line = active_threshold
                         st.pyplot(build_person_score_figure(df, threshold=threshold_line), use_container_width=True)
                         st.success(f"✅ Scores: {scores_path.name}")
 
@@ -538,31 +636,6 @@ def main():
                                 use_container_width=True,
                             )
 
-                        if source_mode == "Upload Video" and save_video and isinstance(video_path, Path):
-                            try:
-                                from visulation import overlay_predictions_on_video
-                                overlay_output_path = Path(run_cfg["paths"]["pose_output_dir"]) / f"overlay_{sparta_branch.lower()}_{source_stem or 'video'}.mp4"
-                                with st.spinner("Generating anomaly overlay video..."):
-                                    overlay_predictions_on_video(
-                                        video_path=video_path,
-                                        pose_json_path=final_json_path,
-                                        scores_csv_path=scores_path,
-                                        output_path=overlay_output_path,
-                                        segment_length=BASE_CFG.get("models", {}).get("sparta", {}).get("seg_len", 24),
-                                    )
-                                if overlay_output_path.exists():
-                                    st.subheader("🎬 Final Anomaly Overlay")
-                                    st.video(str(overlay_output_path))
-                                    with open(overlay_output_path, "rb") as vid_handle:
-                                        st.download_button(
-                                            "⬇️ Download Overlay Video",
-                                            data=vid_handle.read(),
-                                            file_name=overlay_output_path.name,
-                                            mime="video/mp4",
-                                            use_container_width=True,
-                                        )
-                            except Exception as overlay_error:
-                                st.warning(f"Overlay video generation skipped: {overlay_error}")
                 else:
                     st.warning("⚠️ Pose JSON not found; skipping anomaly scoring.")
                     
