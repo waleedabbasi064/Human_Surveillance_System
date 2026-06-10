@@ -29,16 +29,27 @@ def _ensure_remote_file(path: str | None) -> str | None:
         return None
     if os.path.exists(path):
         return path
+
     basename = os.path.basename(path)
     hf_repo = os.environ.get("HF_WEIGHTS_REPO")
+    hf_token = os.environ.get("HF_TOKEN")
+    print(f"[CHECKPOINT] Local path missing: {path}")
+    print(f"[CHECKPOINT] Resolving basename: {basename}")
+    print(f"[CHECKPOINT] HF_WEIGHTS_REPO={hf_repo}")
+    print(f"[CHECKPOINT] WEIGHTS_BASE_URL={os.environ.get('WEIGHTS_BASE_URL')}")
+
     if hf_repo:
         try:
             from huggingface_hub import hf_hub_download
 
-            target = hf_hub_download(repo_id=hf_repo, filename=basename, cache_dir="/tmp",
-                                     force_filename=basename)
+            kwargs = {"repo_id": hf_repo, "filename": basename, "cache_dir": "/tmp", "force_filename": basename}
+            if hf_token:
+                kwargs["token"] = hf_token
+            target = hf_hub_download(**kwargs)
+            print(f"[CHECKPOINT] HF hub download target: {target}")
             if os.path.exists(target):
                 return target
+            print(f"[CHECKPOINT] Downloaded file not found at target: {target}")
         except Exception as e:
             print(f"Failed to download from HF hub: {e}")
 
@@ -48,6 +59,7 @@ def _ensure_remote_file(path: str | None) -> str | None:
             import requests
 
             url = base_url.rstrip("/") + "/" + basename
+            print(f"[CHECKPOINT] Downloading from URL: {url}")
             resp = requests.get(url, stream=True, timeout=60)
             if resp.status_code == 200:
                 out = os.path.join("/tmp", basename)
@@ -55,12 +67,14 @@ def _ensure_remote_file(path: str | None) -> str | None:
                     for chunk in resp.iter_content(8192):
                         if chunk:
                             f.write(chunk)
+                print(f"[CHECKPOINT] Downloaded file to: {out}")
                 return out
             else:
                 print(f"HTTP download failed: {resp.status_code} {resp.reason}")
         except Exception as e:
             print(f"Failed to download from WEIGHTS_BASE_URL: {e}")
 
+    print("[CHECKPOINT] Could not resolve remote file; no HF_WEIGHTS_REPO or WEIGHTS_BASE_URL worked.")
     return None
 
 
