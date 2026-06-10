@@ -26,3 +26,6 @@ requests
 
 # For tensorboard integration used by training utilities
 tensorboard>=2.12.0
+
+# Web UI
+streamlit>=1.28.0
