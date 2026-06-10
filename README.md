@@ -1,5 +1,15 @@
+---
+title: Human Centric Anomaly Detection Agent
+emoji: 🛡️
+colorFrom: blue
+colorTo: red
+sdk: docker
+app_port: 8501
+---
+
 # Human-Centric Video Anomaly Detection
 
+This repository contains an updated SPARTA pipeline for pose-based anomaly detection on surveillance videos using Streamlit. It builds on the original SPARTA architecture from TeCSAR-UNCC/SPARTA, utilizing a multi-person inference paradigm.
 This repository contains an updated SPARTA pipeline for pose-based anomaly detection on surveillance videos. It builds on the original SPARTA architecture from [TeCSAR-UNCC/SPARTA](https://github.com/TeCSAR-UNCC/SPARTA), which trains the shared encoder plus the twin decoders (CTD/FTD) on multiple datasets; this fork focuses on streamlined multi-person inference and tooling.
 
 It includes:
