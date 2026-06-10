@@ -1,0 +1,68 @@
+batch_size: 256
+branch: SPARTA_C
+ckpt_dir: data/exp_dir/corridor/Mar28_2125
+data_dir: data/
+dataset: corridor
+device: cuda:0
+disable_eval_during_train: false
+dropout: 0.3
+epochs: 50
+eval_interval: 1
+exp_dir: data/exp_dir
+global_pose_segs: true
+headless: false
+log_freq: 200
+mask_root: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Preprocessedd-data/flat_labels
+metrics_csv: metrics.csv
+model_a: 1.0
+model_b: 1.0
+model_c: 1.0
+model_ckpt_C: null
+model_ckpt_F: null
+model_ckpt_dir: null
+model_d: 1.0
+model_latent_dim: 64
+model_loss: mse
+model_lr: 0.0001
+model_lr_decay: 0.99
+model_num_heads: 2
+model_num_layers: 4
+model_optimizer: adam
+model_save_dir: ./results-sparta-c
+model_weight_decay: 5.0e-05
+norm_scale: 0
+num_kp: 18
+num_transform: 2
+num_workers: 8
+only_test: false
+plot_vid: 0
+pose_path:
+  test: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Preprocessedd-data/compatible-test-for-checking
+  train: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Preprocessedd-data/compatible-train-for-checking
+  train_abnormal: null
+pose_path_test: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Preprocessedd-data/compatible-test-for-checking
+pose_path_train: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Preprocessedd-data/compatible-train-for-checking
+pose_path_train_abnormal: null
+prop_norm_scale: 1
+recon_encoder_path: null
+relative: true
+save: test1
+save_all_checkpoints: false
+save_results: true
+save_results_dir: ./evaluation_results_c
+sched: tri
+seed: 16909275522085269113
+seg_len: 24
+seg_stride: 12
+skip_final_eval: false
+specific_clip: null
+token_config: t
+train_seg_conf_th: 0.0
+traj: false
+verbose: 1
+vid_path:
+  test: .
+  train: .
+vid_path_test: .
+vid_path_train: .
+vid_res: null
