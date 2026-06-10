@@ -14,15 +14,42 @@ jobs:
               with:
                   fetch-depth: 0
 
-            - name: Push to Hugging Face Space Remote
+            - name: Push clean snapshot to Hugging Face Space
               env:
                   HF_TOKEN: ${{ secrets.HF_TOKEN }}
+                  HF_USER: shahzaib7788
+                  HF_SPACE: human-centric-anomaly-detection
               run: |
+                  set -euo pipefail
                   git config --global user.email "shahzain4455.com@gmail.com"
                   git config --global user.name "shahzaibkhan7788"
 
-                  # Fixed: Pointing to shahzaib7788 instead of waleed64
-                  git remote add hf https://shahzaibkhan7788:$HF_TOKEN@huggingface.co/spaces/shahzaib7788/human-centric-anomaly-detection
+                  # Create a clean temporary snapshot that excludes heavy/binary directories
+                  TMPDIR=$(mktemp -d)
+                  rsync -a --exclude '.git' \
+                        --exclude 'Trained_Models' \
+                        --exclude 'results-sparta-c' \
+                        --exclude 'results-sparta-f' \
+                        --exclude 'visualizations' \
+                        ./ "$TMPDIR/"
 
-                  # Force push to overwrite the default setup
+                  cd "$TMPDIR"
+                    echo "[DEBUG] Snapshot root files:" && ls -la || true
+                    echo "[DEBUG] Checking for offending files..."
+                    # Fail early if any known offending patterns are present in the snapshot
+                    if find . -type f | egrep -i '\.(pth|pt|tar|tar.gz)$' >/dev/null 2>&1; then
+                        echo "[ERROR] Binary weight files found in snapshot; aborting push." >&2
+                        find . -type f | egrep -i '\.(pth|pt|tar|tar.gz)$' || true
+                        exit 1
+                    fi
+
+                  git init
+                  git checkout -b main
+                    # Ensure no heavy files are staged by removing known folders if present
+                    git add . || true
+                    git rm -r --cached Trained_Models results-sparta-c results-sparta-f visualizations || true
+                  git commit -m "Clean deploy: code only (weights hosted on HF model repo)"
+
+                  REMOTE_URL="https://${HF_USER}:${HF_TOKEN}@huggingface.co/spaces/${HF_USER}/${HF_SPACE}.git"
+                  git remote add hf "$REMOTE_URL"
                   git push --force hf main
