@@ -48,8 +48,6 @@ PoseEstimationModel/uploads/
 *.pt
 *.pth
 *.onnx
-*.yaml
-*.yml
 runs/
 logs/
 *.log
