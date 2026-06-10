@@ -40,16 +40,49 @@ def _ensure_remote_file(path: str | None) -> str | None:
 
     if hf_repo:
         try:
-            from huggingface_hub import hf_hub_download
+            from huggingface_hub import hf_hub_download, list_repo_files
 
-            kwargs = {"repo_id": hf_repo, "filename": basename, "cache_dir": "/tmp", "force_filename": basename}
-            if hf_token:
-                kwargs["token"] = hf_token
-            target = hf_hub_download(**kwargs)
-            print(f"[CHECKPOINT] HF hub download target: {target}")
-            if os.path.exists(target):
-                return target
-            print(f"[CHECKPOINT] Downloaded file not found at target: {target}")
+            print(f"[CHECKPOINT] Listing files in HF repo: {hf_repo}")
+            try:
+                repo_files = list_repo_files(repo_id=hf_repo)
+            except Exception as _e:
+                # list_repo_files can fail due to rate limits or permissions; fall back to direct filename attempt
+                print(f"[CHECKPOINT] list_repo_files failed: {_e}; will try direct download of basename")
+                repo_files = []
+
+            # Find any file in the repo that ends with the basename
+            candidates = [f for f in repo_files if f.endswith('/' + basename) or f == basename or f.endswith(basename)]
+            if candidates:
+                # prefer exact basename at root, otherwise first match
+                chosen = None
+                for c in candidates:
+                    if os.path.basename(c) == basename and (c == basename or not '/' in c):
+                        chosen = c
+                        break
+                if chosen is None:
+                    chosen = candidates[0]
+
+                print(f"[CHECKPOINT] Found candidate in repo: {chosen}; attempting download")
+                kwargs = {"repo_id": hf_repo, "filename": chosen, "cache_dir": "/tmp"}
+                if hf_token:
+                    kwargs["token"] = hf_token
+                target = hf_hub_download(**kwargs)
+                print(f"[CHECKPOINT] HF hub download target: {target}")
+                if os.path.exists(target):
+                    return target
+                print(f"[CHECKPOINT] Downloaded file not found at target: {target}")
+            else:
+                # try direct download attempt using basename as fallback
+                try:
+                    kwargs = {"repo_id": hf_repo, "filename": basename, "cache_dir": "/tmp"}
+                    if hf_token:
+                        kwargs["token"] = hf_token
+                    target = hf_hub_download(**kwargs)
+                    print(f"[CHECKPOINT] HF hub direct download target: {target}")
+                    if os.path.exists(target):
+                        return target
+                except Exception as e:
+                    print(f"Failed to download from HF hub (direct): {e}")
         except Exception as e:
             print(f"Failed to download from HF hub: {e}")
 
