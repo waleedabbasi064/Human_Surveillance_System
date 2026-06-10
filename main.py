@@ -121,6 +121,52 @@ def main ():
     cfg = load_config(getattr(args, "config", None))
     args = merge_config(args, cfg, parser)
 
+    # Attempt to ensure `PoseEstimationModel/config.yaml` exists in the Space repo.
+    # This is performed at runtime (container startup) using `HF_TOKEN` if provided.
+    def _ensure_config_uploaded():
+        local_path = os.path.join(os.getcwd(), "PoseEstimationModel", "config.yaml")
+        # If not present, try copying from config/default.yaml to create a local file to upload.
+        if not os.path.exists(local_path):
+            alt = os.path.join(os.getcwd(), "config", "default.yaml")
+            if os.path.exists(alt):
+                try:
+                    import shutil
+                    os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                    shutil.copy(alt, local_path)
+                    print(f"[CONFIG] Created {local_path} from {alt}")
+                except Exception as e:
+                    print(f"[CONFIG] Failed to copy default config: {e}")
+            else:
+                print("[CONFIG] No local config found to upload and no default to copy.")
+                return
+
+        hf_token = os.environ.get("HF_TOKEN")
+        if not hf_token:
+            print("[CONFIG] HF_TOKEN not set; skipping remote upload.")
+            return
+
+        repo_id = os.environ.get("HF_SPACE_REPO", "shahzaib7788/human-centric-anomaly-detection")
+        try:
+            from huggingface_hub import upload_file
+            print(f"[CONFIG] Uploading {local_path} -> {repo_id}:PoseEstimationModel/config.yaml")
+            upload_file(
+                path_or_fileobj=local_path,
+                path_in_repo="PoseEstimationModel/config.yaml",
+                repo_id=repo_id,
+                repo_type="space",
+                token=hf_token,
+                commit_message="Ensure PoseEstimationModel/config.yaml present",
+            )
+            print("[CONFIG] Upload succeeded.")
+        except Exception as e:
+            print(f"[CONFIG] Upload failed: {e}")
+
+    # Run uploader in a best-effort, non-fatal way.
+    try:
+        _ensure_config_uploaded()
+    except Exception as _e:
+        print(f"[CONFIG] Ignored upload error: {_e}")
+
     # Provide a safe default pointing to your HF model repo if the Space did not set it
     os.environ.setdefault("HF_WEIGHTS_REPO", "shahzaib7788/pose-weights")
 
