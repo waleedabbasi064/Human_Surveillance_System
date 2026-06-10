@@ -30,7 +30,9 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 
 # Copy application assets, entrypoints, and your 20MB custom weight directory
 COPY --chown=user ./src /app/src
-COPY --chown=user ./models /app/models
+# Copy models code: project has `models.py` (file). Some deploy snapshots lack a `models/` folder,
+# so copy the file explicitly to avoid build failures on Spaces.
+COPY --chown=user models.py /app/models.py
 COPY --chown=user main.py /app/main.py
 COPY --chown=user streamlit_pose_app.py /app/streamlit_pose_app.py
 
