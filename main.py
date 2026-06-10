@@ -121,6 +121,9 @@ def main ():
     cfg = load_config(getattr(args, "config", None))
     args = merge_config(args, cfg, parser)
 
+    # Provide a safe default pointing to your HF model repo if the Space did not set it
+    os.environ.setdefault("HF_WEIGHTS_REPO", "shahzaib7788/pose-weights")
+
     def save_raw_scores(scores, label_suffix="", threshold=None, metadata=None):
         save_dir = args.save_results_dir or os.path.join(args.model_save_dir, "evaluation_results")
         os.makedirs(save_dir, exist_ok=True)
