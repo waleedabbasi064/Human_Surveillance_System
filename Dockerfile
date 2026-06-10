@@ -43,5 +43,6 @@ COPY --chown=user streamlit_pose_app.py /app/streamlit_pose_app.py
 # Expose internal Streamlit port
 EXPOSE 8501
 
-# Execute main process launcher
-CMD ["python", "main.py"]
+# Execute Streamlit as the web entrypoint so the Space serves the UI
+# Streamlit will pick up `streamlit_pose_app.py` in the repo root.
+CMD ["streamlit", "run", "streamlit_pose_app.py", "--server.port", "8501", "--server.address", "0.0.0.0", "--server.headless", "true"]
