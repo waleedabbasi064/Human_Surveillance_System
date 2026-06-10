@@ -133,6 +133,11 @@ class EmptyDataset(Dataset):
     """Placeholder dataset used when no input video or pose JSONs are available yet."""
     def __init__(self):
         self.num_samples = 0
+        # Provide minimal attributes expected by downstream code
+        self.metadata = []
+        self.person_keys = {}
+        self.global_data = []
+        self.segs_score_np = np.array([])
 
     def __len__(self):
         return 0
