@@ -1,0 +1,28 @@
+name: Deploy to Hugging Face
+
+on:
+    push:
+        branches:
+            - main
+
+jobs:
+    deploy:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout Repository
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Push to Hugging Face Space Remote
+              env:
+                  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+              run: |
+                  git config --global user.email "shahzain4455.com@gmail.com"
+                  git config --global user.name "shahzaibkhan7788"
+
+                  # Fixed: Pointing to shahzaib7788 instead of waleed64
+                  git remote add hf https://shahzaibkhan7788:$HF_TOKEN@huggingface.co/spaces/shahzaib7788/human-centric-anomaly-detection
+
+                  # Force push to overwrite the default setup
+                  git push --force hf main
