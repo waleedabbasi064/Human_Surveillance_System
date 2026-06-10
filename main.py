@@ -205,6 +205,28 @@ def main ():
 
     def save_raw_scores(scores, label_suffix="", threshold=None, metadata=None):
         save_dir = args.save_results_dir or os.path.join(args.model_save_dir, "evaluation_results")
+        # Sanitize save_dir: if config points to a developer absolute path we cannot write to,
+        # relocate under the current working directory.
+        def _sanitize_dir(path):
+            try:
+                # If parent is writable, keep
+                parent = os.path.dirname(path) or path
+                if os.access(parent, os.W_OK):
+                    return path
+            except Exception:
+                pass
+            # If path starts with the developer home, remap into cwd to avoid PermissionError
+            dev_home_prefix = '/home/waleed64'
+            if path.startswith(dev_home_prefix):
+                new_path = os.path.join(os.getcwd(), os.path.relpath(path, dev_home_prefix))
+                print(f"[PATH] Remapping unwritable path {path} -> {new_path}")
+                return new_path
+            # As a last resort, put under current working directory
+            fallback = os.path.join(os.getcwd(), os.path.basename(path))
+            print(f"[PATH] Using fallback save dir: {fallback}")
+            return fallback
+
+        save_dir = _sanitize_dir(save_dir)
         os.makedirs(save_dir, exist_ok=True)
         label = label_suffix or args.branch.lower()
         out_path = os.path.join(save_dir, f"{label}_scores.csv")
@@ -226,6 +248,16 @@ def main ():
         import matplotlib.pyplot as plt
 
         plot_dir = args.plot_results_dir or args.save_results_dir or os.path.join(args.model_save_dir, "evaluation_plots")
+        # reuse same sanitization
+        def _sanitize_plot_dir(path):
+            dev_home_prefix = '/home/waleed64'
+            if path.startswith(dev_home_prefix):
+                new_path = os.path.join(os.getcwd(), os.path.relpath(path, dev_home_prefix))
+                print(f"[PATH] Remapping unwritable path {path} -> {new_path}")
+                return new_path
+            return path
+
+        plot_dir = _sanitize_plot_dir(plot_dir)
         os.makedirs(plot_dir, exist_ok=True)
         label = label_suffix or args.branch.lower()
         out_path = os.path.join(plot_dir, f"{label}_scores_plot.png")
