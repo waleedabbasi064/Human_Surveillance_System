@@ -36,6 +36,7 @@ COPY --chown=user utils /app/utils
 # Copy models code: project has `models.py` (file). Some deploy snapshots lack a `models/` folder.
 COPY --chown=user models.py /app/models.py
 COPY --chown=user main.py /app/main.py
+COPY --chown=user args.py /app/args.py
 COPY --chown=user streamlit_pose_app.py /app/streamlit_pose_app.py
 
 # Expose internal Streamlit port
