@@ -128,6 +128,18 @@ class PoseSegDataset(Dataset):
     def __len__(self):
         return self.num_transform * self.num_samples
 
+
+class EmptyDataset(Dataset):
+    """Placeholder dataset used when no input video or pose JSONs are available yet."""
+    def __init__(self):
+        self.num_samples = 0
+
+    def __len__(self):
+        return 0
+
+    def __getitem__(self, idx):
+        raise IndexError("EmptyDataset has no items")
+
 def get_dataset_and_loader(args, trans_list, only_test=False):
     loader_args = {'batch_size': args.batch_size, 'num_workers': args.num_workers, 'pin_memory': True}
     
@@ -150,7 +162,7 @@ def get_dataset_and_loader(args, trans_list, only_test=False):
         
         # If configured pose path is missing but a video was provided, run the pose extraction pipeline
         pose_path = args.pose_path[split]
-        if not os.path.exists(str(pose_path)):
+        if not pose_path or not os.path.exists(str(pose_path)):
             vid = args.vid_path.get(split) if isinstance(args.vid_path, dict) else args.vid_path
             if vid and os.path.exists(str(vid)):
                 out_dir = os.path.join(os.getcwd(), "pose_outputs")
@@ -185,6 +197,13 @@ def get_dataset_and_loader(args, trans_list, only_test=False):
                     print(f"[GET_LOADER] Pose extraction failed: {e}")
                 # point the pose path to the generated directory
                 args.pose_path[split] = out_dir
+
+        # If still no pose data and no video to extract from, create an empty dataset and continue.
+        if not args.pose_path[split] or not os.path.exists(str(args.pose_path[split])):
+            print(f"[GET_LOADER] No pose JSONs or input video found for split '{split}'. Creating empty dataset and waiting for upload.")
+            dataset[split] = EmptyDataset()
+            loader[split] = DataLoader(dataset[split], **loader_args, shuffle=False)
+            continue
 
         dataset[split] = PoseSegDataset(args.pose_path[split], **dataset_args) # Simplified for display
         loader[split] = DataLoader(dataset[split], **loader_args, shuffle=(split == 'train'))
