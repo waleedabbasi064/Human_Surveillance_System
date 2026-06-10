@@ -39,8 +39,12 @@ videos*/
 
 # --- PoseEstimationModel Specific ---
 # Ignore everything in folder but keep .py files
+
+# --- PoseEstimationModel Specific ---
+# Ignore everything in folder but keep .py and .yaml files
 PoseEstimationModel/*
 !PoseEstimationModel/*.py
+!PoseEstimationModel/*.yaml
 PoseEstimationModel/output/  
 PoseEstimationModel/uploads/
 
