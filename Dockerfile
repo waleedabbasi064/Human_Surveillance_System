@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Secure container privileges (Hugging Face user container standard requirement)
-RUN useradd -m -u 1000 user
+RUN useradd -m -u 1000 user && chown -R user:user /app
 USER user
 ENV PATH="/home/user/.local/bin:${PATH}"
 
