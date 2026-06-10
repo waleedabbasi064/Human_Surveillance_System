@@ -1,26 +1,50 @@
-# upload_weights.py
 from huggingface_hub import HfApi
 import glob, os
 
 api = HfApi()
-username = api.whoami(token=os.environ['HF_TOKEN'])['name']
+
+username = api.whoami(token=os.environ["HF_TOKEN"]) ["name"]
+# Use username-qualified repo id so uploads target your account namespace
 repo_id = f"{username}/pose-weights"
-token = os.environ['HF_TOKEN']
+token = os.environ["HF_TOKEN"]
+
+# Ensure the repo exists (create if missing)
+try:
+    api.create_repo(repo_id=repo_id, token=token, private=False, exist_ok=True)
+    print(f"Ensured repo exists: {repo_id}")
+except Exception as e:
+    print(f"Warning: could not create or verify repo {repo_id}: {e}")
+
+ALLOWED_EXTENSIONS = (".pt", ".pth", ".pth.tar")
 
 patterns = [
-    "PoseEstimationModel/*.pt",
-    "PoseEstimationModel/*.pth*",
-    "results-sparta-c/*.pth.tar",
-    "results-sparta-f/*.pth.tar",
-    "Trained_Models/**/*.pth.tar",
-    "mmpose/**/*.pth",
+    "PoseEstimationModel/",
+    "Trained_Models/",
+    "results-sparta-c/",
+    "results-sparta-f/",
+    "mmpose/",
 ]
-files = []
-for p in patterns:
-    files += glob.glob(p, recursive=True)
 
+files = []
+
+# collect all files recursively
+for p in patterns:
+    for ext in ALLOWED_EXTENSIONS:
+        files += glob.glob(os.path.join(p, f"**/*{ext}"), recursive=True)
+
+# upload with FULL relative path (THIS preserves structure)
 for path in sorted(set(files)):
-    fname = os.path.basename(path)               # upload as root filename (recommended)
-    print("Uploading", fname, "from", path)
-    api.upload_file(path_or_fileobj=path, path_in_repo=fname, repo_id=repo_id, token=token)
-print("Done.")
+
+    # THIS is the key fix 👇
+    repo_path = os.path.relpath(path, start=".")
+
+    print("Uploading:", repo_path)
+
+    api.upload_file(
+        path_or_fileobj=path,
+        path_in_repo=repo_path,   # 👈 preserves folder structure
+        repo_id=repo_id,
+        token=token
+    )
+
+print("Done 🚀")
