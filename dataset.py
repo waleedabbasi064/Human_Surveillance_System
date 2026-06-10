@@ -3,6 +3,9 @@ import math
 import os
 import re
 import numpy as np
+import subprocess
+import time
+import yaml
 from torch.utils.data import Dataset
 from tqdm import tqdm
 from utils.data_utils import normalize_pose
@@ -145,8 +148,44 @@ def get_dataset_and_loader(args, trans_list, only_test=False):
     for split in splits:
         print(f"[GET_LOADER] Loading {split} split from: {args.pose_path[split]}")
         
-        # ... (keep existing dataset initialization code) ...
-        
+        # If configured pose path is missing but a video was provided, run the pose extraction pipeline
+        pose_path = args.pose_path[split]
+        if not os.path.exists(str(pose_path)):
+            vid = args.vid_path.get(split) if isinstance(args.vid_path, dict) else args.vid_path
+            if vid and os.path.exists(str(vid)):
+                out_dir = os.path.join(os.getcwd(), "pose_outputs")
+                os.makedirs(out_dir, exist_ok=True)
+
+                # Prepare a temporary config that points pose_output_dir to out_dir
+                cfg_src = os.path.join("PoseEstimationModel", "config.yaml")
+                try:
+                    with open(cfg_src, "r", encoding="utf-8") as f:
+                        cfg = yaml.safe_load(f)
+                except Exception:
+                    cfg = {}
+                cfg.setdefault("paths", {})["pose_output_dir"] = out_dir
+                tmp_cfg = os.path.join(out_dir, f"pose_config_{int(time.time())}.yaml")
+                with open(tmp_cfg, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(cfg, f)
+
+                cmd = [
+                    "python", "PoseEstimationModel/inference_sparta_vit.py",
+                    "--config", tmp_cfg,
+                    "--video_path", str(vid),
+                    "--device", "cpu",
+                    "--branch", args.branch,
+                    "--output_video", os.path.join(out_dir, "sparta_out.avi"),
+                    "--output_csv", os.path.join(out_dir, "sparta_out.csv"),
+                    "--output_plot", os.path.join(out_dir, "sparta_out.png"),
+                ]
+                try:
+                    print(f"[GET_LOADER] Running pose extraction: {' '.join(cmd)}")
+                    subprocess.check_call(cmd)
+                except subprocess.CalledProcessError as e:
+                    print(f"[GET_LOADER] Pose extraction failed: {e}")
+                # point the pose path to the generated directory
+                args.pose_path[split] = out_dir
+
         dataset[split] = PoseSegDataset(args.pose_path[split], **dataset_args) # Simplified for display
         loader[split] = DataLoader(dataset[split], **loader_args, shuffle=(split == 'train'))
         
