@@ -126,9 +126,73 @@ class Config:
         self.det_save_video = self.cfg.get("models", {}).get("detection", {}).get("save_video", False)
 
     def resolve(self, p: str | Path | None) -> Optional[Path]:
-        if p is None: return None
+        """
+        Resolve a configured path. If the file is missing locally, attempt to
+        download it from a remote source using the environment variables below:
+
+        - `HF_WEIGHTS_REPO`: a Hugging Face Hub repo id (e.g. `username/pose-weights`).
+          If set, the code will attempt to download a file with the same basename
+          from that repo using `huggingface_hub.hf_hub_download`.
+        - `WEIGHTS_BASE_URL`: a generic HTTP(S) base URL where files can be fetched
+          by filename (fallback if `HF_WEIGHTS_REPO` is not set).
+
+        Returns the Path to the local file (downloaded or existing) or None.
+        """
+        if p is None:
+            return None
         p = Path(p)
-        return p if p.is_absolute() else (self.base_dir / p).resolve()
+
+        # If absolute, return as-is (exists check left to caller)
+        if p.is_absolute():
+            return p if p.exists() else p
+
+        local = (self.base_dir / p).resolve()
+        if local.exists():
+            return local
+
+        filename = p.name
+        hf_repo = os.environ.get("HF_WEIGHTS_REPO")
+        if hf_repo:
+            try:
+                # Lazy import to avoid hard dependency if not used
+                from huggingface_hub import hf_hub_download
+                target = hf_hub_download(repo_id=hf_repo, filename=filename, cache_dir=str(self.base_dir), force_filename=filename)
+                downloaded = Path(target)
+                if downloaded.exists():
+                    dest = local
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        downloaded.replace(dest)
+                    except Exception:
+                        import shutil
+
+                        shutil.copy2(downloaded, dest)
+                    return dest
+            except Exception:
+                # proceed to HTTP fallback
+                pass
+
+        base_url = os.environ.get("WEIGHTS_BASE_URL")
+        if base_url:
+            try:
+                import requests
+
+                url = base_url.rstrip("/") + "/" + filename
+                resp = requests.get(url, stream=True, timeout=30)
+                if resp.status_code == 200:
+                    local.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = local.with_suffix(local.suffix + ".downloading")
+                    with open(tmp, "wb") as f:
+                        for chunk in resp.iter_content(8192):
+                            if chunk:
+                                f.write(chunk)
+                    tmp.replace(local)
+                    return local
+            except Exception:
+                pass
+
+        # Not found locally and no remote succeeded: return intended local path
+        return local
 
     def detection_weight(self) -> ModelPaths:
         det = self.cfg["models"]["detection"]
