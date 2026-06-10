@@ -28,10 +28,12 @@ ENV PATH="/home/user/.local/bin:${PATH}"
 COPY --chown=user requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir --user -r requirements.txt
 
-# Copy application assets, entrypoints, and your 20MB custom weight directory
-COPY --chown=user ./src /app/src
-# Copy models code: project has `models.py` (file). Some deploy snapshots lack a `models/` folder,
-# so copy the file explicitly to avoid build failures on Spaces.
+# Copy application assets and entrypoints using the actual repo layout.
+# The repository does not contain a `src/` folder, so do not copy it.
+COPY --chown=user config /app/config
+COPY --chown=user PoseEstimationModel /app/PoseEstimationModel
+COPY --chown=user utils /app/utils
+# Copy models code: project has `models.py` (file). Some deploy snapshots lack a `models/` folder.
 COPY --chown=user models.py /app/models.py
 COPY --chown=user main.py /app/main.py
 COPY --chown=user streamlit_pose_app.py /app/streamlit_pose_app.py
