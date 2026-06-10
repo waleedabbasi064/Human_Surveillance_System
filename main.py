@@ -15,6 +15,53 @@ import os
 from models import *
 from utils.tokenizer import Tokenizer
 from utils.eval import eval
+import subprocess
+
+
+def _ensure_remote_file(path: str | None) -> str | None:
+    """If `path` does not exist locally, attempt to download it.
+
+    - If `HF_WEIGHTS_REPO` env is set, try to download the basename from that repo.
+    - Else if `WEIGHTS_BASE_URL` is set, attempt HTTP GET.
+    Returns a path that exists locally or None if unresolved.
+    """
+    if not path:
+        return None
+    if os.path.exists(path):
+        return path
+    basename = os.path.basename(path)
+    hf_repo = os.environ.get("HF_WEIGHTS_REPO")
+    if hf_repo:
+        try:
+            from huggingface_hub import hf_hub_download
+
+            target = hf_hub_download(repo_id=hf_repo, filename=basename, cache_dir="/tmp",
+                                     force_filename=basename)
+            if os.path.exists(target):
+                return target
+        except Exception as e:
+            print(f"Failed to download from HF hub: {e}")
+
+    base_url = os.environ.get("WEIGHTS_BASE_URL")
+    if base_url:
+        try:
+            import requests
+
+            url = base_url.rstrip("/") + "/" + basename
+            resp = requests.get(url, stream=True, timeout=60)
+            if resp.status_code == 200:
+                out = os.path.join("/tmp", basename)
+                with open(out, "wb") as f:
+                    for chunk in resp.iter_content(8192):
+                        if chunk:
+                            f.write(chunk)
+                return out
+            else:
+                print(f"HTTP download failed: {resp.status_code} {resp.reason}")
+        except Exception as e:
+            print(f"Failed to download from WEIGHTS_BASE_URL: {e}")
+
+    return None
 
 
 def _build_score_rows(scores, metadata=None, threshold=None):
@@ -253,12 +300,16 @@ def main ():
             return
 
     else:
+        # Ensure checkpoints are available locally (download from HF hub or HTTP if configured)
         if args.branch == "SPARTA_H":
+            args.model_ckpt_C = _ensure_remote_file(args.model_ckpt_C) or args.model_ckpt_C
+            args.model_ckpt_F = _ensure_remote_file(args.model_ckpt_F) or args.model_ckpt_F
             sparta_c_weights = torch.load(args.model_ckpt_C, map_location=args.device)
             sparta_f_weights = torch.load(args.model_ckpt_F, map_location=args.device)
             Transformer_model.CTD.load_state_dict(sparta_c_weights['state_dict'])
             Transformer_model.FTD.load_state_dict(sparta_f_weights['state_dict'])
         else:
+            args.model_ckpt_dir = _ensure_remote_file(args.model_ckpt_dir) or args.model_ckpt_dir
             checkpoint = torch.load(args.model_ckpt_dir,  map_location=args.device)
             Transformer_model.load_state_dict(checkpoint['state_dict'])
         print('Model loaded successfully!')
