@@ -43,4 +43,4 @@ COPY --chown=user streamlit_pose_app.py /app/streamlit_pose_app.py
 EXPOSE 7860
 
 # Force Streamlit to be the main PID (entrypoint). Use ${PORT} so HF can change it if needed.
-CMD ["streamlit", "run", "streamlit_pose_app.py", "--server.address=0.0.0.0", "--server.port=${PORT}", "--server.enableCORS=false", "--server.enableXsrfProtection=false"]
+CMD ["/bin/sh", "-c", "streamlit run streamlit_pose_app.py --server.address=0.0.0.0 --server.port=${PORT} --server.enableCORS=false --server.enableXsrfProtection=false"]
