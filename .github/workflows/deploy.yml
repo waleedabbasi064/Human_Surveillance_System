@@ -34,22 +34,45 @@ jobs:
                         ./ "$TMPDIR/"
 
                   cd "$TMPDIR"
-                    echo "[DEBUG] Snapshot root files:" && ls -la || true
-                    echo "[DEBUG] Checking for offending files..."
-                    # Fail early if any known offending patterns are present in the snapshot
-                    if find . -type f | egrep -i '\.(pth|pt|tar|tar.gz)$' >/dev/null 2>&1; then
-                        echo "[ERROR] Binary weight files found in snapshot; aborting push." >&2
-                        find . -type f | egrep -i '\.(pth|pt|tar|tar.gz)$' || true
-                        exit 1
-                    fi
+                  echo "[DEBUG] Snapshot root files:" && ls -la || true
+                  echo "[DEBUG] Checking for offending files..."
+                  if find . -type f | egrep -i '\.(pth|pt|tar|tar.gz)$' >/dev/null 2>&1; then
+                      echo "[ERROR] Binary weight files found in snapshot; aborting push." >&2
+                      find . -type f | egrep -i '\.(pth|pt|tar|tar.gz)$' || true
+                      exit 1
+                  fi
 
+                  # Initialize git repo for snapshot
                   git init
                   git checkout -b main
-                    # Ensure no heavy files are staged by removing known folders if present
-                    git add . || true
-                    git rm -r --cached Trained_Models results-sparta-c results-sparta-f visualizations || true
+                  git add . || true
+                  git rm -r --cached Trained_Models results-sparta-c results-sparta-f visualizations || true
                   git commit -m "Clean deploy: code only (weights hosted on HF model repo)"
+
+                  # Configure git-lfs (helps avoid pushing large binaries by accident)
+                  sudo apt-get update && sudo apt-get install -y git-lfs || true
+                  git lfs install --skip-repo || true
 
                   REMOTE_URL="https://${HF_USER}:${HF_TOKEN}@huggingface.co/spaces/${HF_USER}/${HF_SPACE}.git"
                   git remote add hf "$REMOTE_URL"
-                  git push --force hf main
+
+                  # Push with retries (exponential backoff). HF may return transient 429 rate-limit errors.
+                  MAX_ATTEMPTS=5
+                  for attempt in $(seq 1 $MAX_ATTEMPTS); do
+                    echo "[PUSH] Attempt $attempt of $MAX_ATTEMPTS"
+                    if git push --force hf main; then
+                      echo "[PUSH] Success"
+                      break
+                    else
+                      rc=$?
+                      echo "[PUSH] Failed with rc=$rc"
+                      if [ $attempt -lt $MAX_ATTEMPTS ]; then
+                        sleep_time=$((attempt * 10 + (RANDOM % 10)))
+                        echo "[PUSH] Retrying after ${sleep_time}s..."
+                        sleep $sleep_time
+                      else
+                        echo "[PUSH] All attempts failed. Exiting with last rc=$rc" >&2
+                        exit $rc
+                      fi
+                    fi
+                  done
