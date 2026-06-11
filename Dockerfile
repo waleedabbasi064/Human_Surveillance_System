@@ -3,9 +3,8 @@ FROM python:3.10-slim
 # System setup & Streamlit environment routing variables
 ENV PYTHONUNBUFFERED=1 \
     XDG_CACHE_HOME="/tmp/.cache" \
-    STREAMLIT_SERVER_PORT=8501 \
-    STREAMLIT_SERVER_ADDRESS="0.0.0.0" \
-    STREAMLIT_SERVER_HEADLESS="true"
+    # Expose and prefer the HF Spaces default port (7860). Use $PORT so HF can override it.
+    PORT=7860
 
 # Install fundamental system tooling for image processing and C-extensions
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -40,9 +39,8 @@ COPY --chown=user args.py /app/args.py
 COPY --chown=user dataset.py /app/dataset.py
 COPY --chown=user streamlit_pose_app.py /app/streamlit_pose_app.py
 
-# Expose internal Streamlit port
-EXPOSE 8501
+# Expose the HF-friendly Streamlit port
+EXPOSE 7860
 
-# Execute Streamlit as the web entrypoint so the Space serves the UI
-# Streamlit will pick up `streamlit_pose_app.py` in the repo root.
-CMD ["/bin/sh", "-c", "streamlit run streamlit_pose_app.py --server.port ${PORT:-8501} --server.address 0.0.0.0 --server.headless true"]
+# Force Streamlit to be the main PID (entrypoint). Use ${PORT} so HF can change it if needed.
+CMD ["streamlit", "run", "streamlit_pose_app.py", "--server.address=0.0.0.0", "--server.port=${PORT}", "--server.enableCORS=false", "--server.enableXsrfProtection=false"]
