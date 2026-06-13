@@ -17,7 +17,7 @@ jobs:
             - name: Push clean snapshot to Hugging Face Space
               env:
                   HF_TOKEN: ${{ secrets.HF_TOKEN }}
-                  HF_USER: shahzaib7788
+                  HF_USER: shahzaib778899
                   HF_SPACE: human-centric-anomaly-detection
               run: |
                   set -euo pipefail
