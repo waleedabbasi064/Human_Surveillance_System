@@ -22,8 +22,7 @@ BASE_DIR = "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent"
 # 1. Explicitly list the exact files to upload from PoseEstimationModel
 explicit_files = [
     os.path.join(BASE_DIR, "PoseEstimationModel/yolo26n.pt"),
-    os.path.join(BASE_DIR, "PoseEstimationModel/td-hm_ViTPose-base_8xb64-210e_coco-256x192-216eae50_20230314.pth"),
-    os.path.join(BASE_DIR, "PoseEstimationModel/td-hm_ViTPose-small_8xb64-210e_coco-256x192-62d7a712_20230314.pth"),
+    os.path.join(BASE_DIR, "PoseEstimationModel/yolo26n-pose.pt"),
 ]
 
 # 2. Grab all files dynamically inside the Trained_Models/CHAD directory

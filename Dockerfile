@@ -3,7 +3,7 @@ FROM python:3.10-slim
 # Prevent Python from writing .pyc files and buffer stdout/stderr
 ENV PYTHONUNBUFFERED=1 \
     XDG_CACHE_HOME="/tmp/.cache" \
-    HF_WEIGHTS_REPO="shahzaib7788/pose-weights" \
+    HF_WEIGHTS_REPO="shahzaib778899/pose-weights" \
     PORT=7860
 
 # Install system dependencies required for OpenCV, Mediapipe, and Video processing
@@ -25,18 +25,17 @@ RUN pip install --no-cache-dir --user -r requirements.txt huggingface_hub
 # 1. Create empty target directories for your models
 RUN mkdir -p /app/PoseEstimationModel /app/Trained_Models/CHAD
 
-# 2. 🚀 BAKE THE MODEL WEIGHTS IN DURING THE BUILD PHASE
-# This downloads your precise 3 files into PoseEstimationModel
+# 2. Bake the model weights in during the build phase
+# This downloads the lightweight detector and pose weights used by the default UI.
 RUN python -c "from huggingface_hub import hf_hub_download; \
-    hf_hub_download(repo_id='shahzaib7788/pose-weights', filename='PoseEstimationModel/yolo26n.pt', local_dir='/app'); \
-    hf_hub_download(repo_id='shahzaib7788/pose-weights', filename='PoseEstimationModel/yolo26n-pose.pt', local_dir='/app'); \
-    hf_hub_download(repo_id='shahzaib7788/pose-weights', filename='PoseEstimationModel/td-hm_ViTPose-base_8xb64-210e_coco-256x192-216eae50_20230314.pth', local_dir='/app'); \
-    hf_hub_download(repo_id='shahzaib7788/pose-weights', filename='PoseEstimationModel/td-hm_ViTPose-small_8xb64-210e_coco-256x192-62d7a712_20230314.pth', local_dir='/app')"
+    repo_id='shahzaib778899/pose-weights'; \
+    hf_hub_download(repo_id=repo_id, filename='PoseEstimationModel/yolo26n.pt', local_dir='/app'); \
+    hf_hub_download(repo_id=repo_id, filename='PoseEstimationModel/yolo26n-pose.pt', local_dir='/app')"
 
-# 3. 🚀 BAKE THE CHAD FOLDER IN DURING THE BUILD PHASE
+# 3. Bake the CHAD folder in during the build phase
 # This downloads the entire CHAD directory from your model repo
 RUN python -c "from huggingface_hub import snapshot_download; \
-    snapshot_download(repo_id='shahzaib7788/pose-weights', allow_patterns='Trained_Models/CHAD/*', local_dir='/app')"
+    snapshot_download(repo_id='shahzaib778899/pose-weights', allow_patterns='Trained_Models/CHAD/*', local_dir='/app')"
 
 # Copy your code application files (Notice we DO NOT copy local model directories anymore)
 COPY --chown=user config /app/config
