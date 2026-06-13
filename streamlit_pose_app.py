@@ -6,6 +6,7 @@ import random
 import subprocess
 import pandas as pd
 import cv2
+import time
 import traceback
 from copy import deepcopy
 from pathlib import Path
@@ -21,6 +22,7 @@ BASE_CONFIG_PATH = POSE_DIR / "config.yaml"
 DEFAULT_CONFIG_PATH = BASE_DIR / "config" / "default.yaml"
 UPLOAD_DIR = POSE_DIR / "uploads"
 UPLOAD_DIR.mkdir(exist_ok=True)
+EXAMPLE_VIDEO_DIR = BASE_DIR / "videos"
 
 def load_yaml_cfg(path: Path) -> Dict:
     if not path.exists():
@@ -65,7 +67,6 @@ def branch_to_display(branch: str | None) -> str:
     return {
         "SPARTA_C": "SPARTA-C",
         "SPARTA_F": "SPARTA-F",
-        "SPARTA_H": "SPARTA-H",
     }.get(str(branch or "").strip(), "SPARTA-C")
 
 
@@ -100,6 +101,15 @@ def save_upload(upload) -> Path:
     with open(target, "wb") as f:
         f.write(upload.getbuffer())
     return target
+
+
+def list_example_videos() -> list[Path]:
+    if not EXAMPLE_VIDEO_DIR.exists():
+        return []
+    examples = []
+    for pattern in ("*.mp4", "*.avi", "*.mov", "*.mkv"):
+        examples.extend(EXAMPLE_VIDEO_DIR.glob(pattern))
+    return sorted(examples)
 
 
 def browser_preview_video(video_path: Path) -> Path:
@@ -150,6 +160,30 @@ def overlay_fps(frame, fps: float, frame_id: int | None = None):
         label = f"{label} | Frame: {frame_id}"
     cv2.putText(frame, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, lineType=cv2.LINE_AA)
     cv2.putText(frame, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, lineType=cv2.LINE_AA)
+    return frame
+
+
+def overlay_behavior_legend(frame):
+    if frame is None:
+        return frame
+    height = frame.shape[0]
+    font_scale = 0.8
+    red_text = "Red: anomalous behavior"
+    green_text = "Green: normal behavior"
+    y_green = max(24, height - 18)
+    y_red = max(42, height - 40)
+   # Change 0.5 to a larger value, for example 1.0 or 1.5
+   # Define initial positions
+    x_pos = 20
+    y_red = 60    # Position for the first line
+    y_green = 100  # Position for the second line (lower down)
+
+    # Apply to your code
+    cv2.putText(frame, red_text, (x_pos, y_red), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 3, lineType=cv2.LINE_AA)
+    cv2.putText(frame, red_text, (x_pos, y_red), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255), 1, lineType=cv2.LINE_AA)
+
+    cv2.putText(frame, green_text, (x_pos, y_green), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 3, lineType=cv2.LINE_AA)
+    cv2.putText(frame, green_text, (x_pos, y_green), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 0), 1, lineType=cv2.LINE_AA)
     return frame
 
 
@@ -570,14 +604,13 @@ def main():
 
         st.divider()
         st.subheader("SPARTA / Anomaly Model")
-        branch_options = ["SPARTA-C", "SPARTA-F", "SPARTA-H"]
+        branch_options = ["SPARTA-C", "SPARTA-F"]
         default_branch_display = branch_to_display(DEFAULT_CFG.get("branch", SPARTA_CFG.get("branch", "SPARTA_C")))
         branch_index = branch_options.index(default_branch_display) if default_branch_display in branch_options else 0
         sparta_branch_display = st.selectbox("SPARTA Branch", branch_options, index=branch_index)
         sparta_branch_map = {
             "SPARTA-C": "SPARTA_C",
             "SPARTA-F": "SPARTA_F",
-            "SPARTA-H": "SPARTA_H",
         }
         sparta_branch = sparta_branch_map.get(sparta_branch_display, sparta_branch_display)
 
@@ -595,27 +628,22 @@ def main():
         threshold_f_input = st.slider("Threshold F", min_value=0.0, max_value=4.0, value=float(default_th_f or 0.0), step=0.01)
         threshold_h_input = st.slider("Threshold H", min_value=0.0, max_value=4.0, value=float(default_th_h or 0.0), step=0.01)
 
-        if sparta_branch == "SPARTA_H":
-            ckpt_c = ckpt_c_default
-            ckpt_f = ckpt_f_default
-            th_c = float(threshold_c_input)
-            th_f = float(threshold_f_input)
-            th_h = float(threshold_h_input)
-            active_threshold = th_h
-        elif sparta_branch == "SPARTA_F":
-            ckpt_c = ""
-            ckpt_f = ckpt_f_default
-            th_c = None
-            th_f = float(threshold_f_input)
-            th_h = None
-            active_threshold = th_f
-        else:
+
+        if sparta_branch == "SPARTA_C":
             ckpt_c = ckpt_c_default
             ckpt_f = ""
             th_f = None
             th_c = float(threshold_c_input)
             th_h = None
             active_threshold = th_c
+        else:
+            ckpt_c = ""
+            ckpt_f = ckpt_f_default
+            th_c = None
+            th_f = float(threshold_f_input)
+            th_h = None
+            active_threshold = th_f
+           
         st.caption(f"Active threshold: {active_threshold:.3f}")
     # --- MAIN: Title and Upload ---
     st.title("🎥 AI powered Human Surveillance application")
@@ -624,10 +652,15 @@ def main():
     
     # Video Source Section
     local_camera_available = camera_available(0)
-    source_options = ["Upload Video"] + (["Use Camera"] if local_camera_available else [])
+    example_videos = list_example_videos()
+    source_options = ["Upload Video"] + (["Use Example Video"] if example_videos else []) + (["Use Camera"] if local_camera_available else [])
     source_mode = st.radio("Choose Input Source", source_options, horizontal=True)
     if not local_camera_available:
         st.caption("No local camera detected on this device. Upload mode is available.")
+    if example_videos:
+        with st.expander(f"Demo videos available ({len(example_videos)})", expanded=False):
+            for example_video in example_videos:
+                st.write(example_video.name)
 
     upload = None
     video_path = None
@@ -640,6 +673,12 @@ def main():
             video_path = save_upload(upload)
             video_source_label = str(video_path)
             source_stem = video_path.stem
+    elif source_mode == "Use Example Video" and example_videos:
+        example_labels = [video.name for video in example_videos]
+        selected_example = st.selectbox("Example Video", example_labels)
+        video_path = example_videos[example_labels.index(selected_example)]
+        video_source_label = str(video_path)
+        source_stem = video_path.stem
     else:
         video_path = "__camera__:0"
         video_source_label = "Local Camera (0)"
@@ -679,16 +718,24 @@ def main():
 
                 try:
                     original_cap = open_display_capture(video_path, source_mode)
-                    display_fps = 25.0
                     display_width = 640
                     if original_cap is not None and original_cap.isOpened():
-                        display_fps = original_cap.get(cv2.CAP_PROP_FPS) or display_fps
                         source_width = int(original_cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
                         if source_width > 0:
                             display_width = min(source_width, 640)
 
                     frame_count = 0
+                    frame_times = []
                     for frame, frame_id, total in pipeline.run_live():
+                        now = time.perf_counter()
+                        frame_times.append(now)
+                        frame_times = [timestamp for timestamp in frame_times if now - timestamp <= 1.0]
+                        if len(frame_times) >= 2:
+                            elapsed = frame_times[-1] - frame_times[0]
+                            live_fps = (len(frame_times) - 1) / elapsed if elapsed > 0 else 0.0
+                        else:
+                            live_fps = 0.0
+
                         original_frame = None
                         if original_cap is not None and original_cap.isOpened():
                             ok, original_frame = original_cap.read()
@@ -697,11 +744,12 @@ def main():
 
                         if original_frame is not None:
                             original_frame = resize_frame_for_display(original_frame, max_width=display_width)
-                            original_frame = overlay_fps(original_frame, display_fps, frame_id + 1)
+                            original_frame = overlay_fps(original_frame, live_fps, frame_id + 1)
                             original_frame_rgb = cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB)
                             original_frame_placeholder.image(original_frame_rgb, channels="RGB", use_container_width=True)
 
-                        processed_frame = overlay_fps(frame.copy(), display_fps, frame_id + 1)
+                        processed_frame = overlay_fps(frame.copy(), live_fps, frame_id + 1)
+                        processed_frame = overlay_behavior_legend(processed_frame)
                         processed_frame = resize_frame_for_display(processed_frame, max_width=display_width)
                         frame_rgb = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
                         frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)

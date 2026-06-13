@@ -23,7 +23,7 @@ models:
             mot20: false
 
     sparta:
-        branch: "CHAD" # SPARTA_C | SPARTA_F | SPARTA_H
+        branch: "CHAD" # SPARTA_C | SPARTA_F
         relative: true
         token_config: "t"
         num_kp: 18
