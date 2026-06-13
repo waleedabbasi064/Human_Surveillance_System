@@ -47,6 +47,7 @@ COPY --chown=user main.py /app/main.py
 COPY --chown=user args.py /app/args.py
 COPY --chown=user dataset.py /app/dataset.py
 COPY --chown=user streamlit_pose_app.py /app/streamlit_pose_app.py
+COPY --chown=user videos /app/videos
 
 EXPOSE 7860
 
