@@ -46,6 +46,7 @@ jobs:
                   git init
                   git checkout -b main
                   git add . || true
+                  git add -f videos || true
                   git rm -r --cached Trained_Models results-sparta-c results-sparta-f visualizations || true
                   git commit -m "Clean deploy: code only (weights hosted on HF model repo)"
 
