@@ -94,7 +94,17 @@ def _open_video_capture(source: Any) -> cv2.VideoCapture:
         except Exception:
             cam_idx = 0
         return cv2.VideoCapture(cam_idx)
+    cap = cv2.VideoCapture(source_str, cv2.CAP_FFMPEG)
+    if cap.isOpened():
+        return cap
+    cap.release()
     return cv2.VideoCapture(source_str)
+
+
+def _video_writer_fourcc(output_video_path: Path, configured_fourcc: str) -> int:
+    if output_video_path.suffix.lower() == ".mp4":
+        return cv2.VideoWriter_fourcc(*"mp4v")
+    return cv2.VideoWriter_fourcc(*configured_fourcc)
 
 
 def _random_vibrant_bgr(rng: random.Random) -> tuple[int, int, int]:
@@ -278,15 +288,20 @@ class Config:
     @property
     def runtime_cfg(self) -> Dict[str, Any]:
         cfg = dict(self.cfg.get("runtime", {}) or {})
-        cfg.setdefault("resize_width", 640)
-        cfg.setdefault("resize_height", 360)
-        cfg.setdefault("capture_buffer_size", 2)
-        cfg.setdefault("use_fp16", True)
-        cfg.setdefault("min_pose_bbox_area", 2500)
-        cfg.setdefault("pose_every_n_frames", 3)
-        cfg.setdefault("sparta_every_n_frames", 5)
-        cfg.setdefault("max_tracks_per_frame", 8)
-        cfg.setdefault("pose_match_iou", 0.05)
+        defaults = {
+            "resize_width": 640,
+            "resize_height": 360,
+            "capture_buffer_size": 2,
+            "use_fp16": True,
+            "min_pose_bbox_area": 2500,
+            "pose_every_n_frames": 3,
+            "sparta_every_n_frames": 5,
+            "max_tracks_per_frame": 8,
+            "pose_match_iou": 0.05,
+        }
+        for key, value in defaults.items():
+            if cfg.get(key) is None:
+                cfg[key] = value
         return cfg
 
     def resolved_paths(self) -> Dict[str, Any]:
@@ -385,7 +400,7 @@ class PersonDetector:
                     boxes = Boxes(torch.zeros((0, 6)), frame.shape[:2])
 
                 # BYTETracker expects a Boxes-like object with .conf/.cls attributes
-                tracks = tracker.update(boxes, frame_runtime)
+                tracks = tracker.update(boxes, frame_infer)
 
                 for t in tracks:  # t: [x1, y1, x2, y2, track_id, score, cls, det_idx]
                     if len(t) >= 5:
@@ -491,7 +506,7 @@ class MMPoseTopDownEstimator(PoseEstimatorBase):
             fps = cap.get(cv2.CAP_PROP_FPS) or 25
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            writer = cv2.VideoWriter(str(output_video_path), cv2.VideoWriter_fourcc(*self.cfg.pose_cfg.get("fourcc", "XVID")), fps, (w, h))
+            writer = cv2.VideoWriter(str(output_video_path), _video_writer_fourcc(output_video_path, self.cfg.pose_cfg.get("fourcc", "XVID")), fps, (w, h))
 
         frame_id = 0
         min_bbox_area = float(self.cfg.runtime_cfg.get("min_pose_bbox_area", 0.0))
@@ -664,7 +679,7 @@ class YoloPoseEstimator(PoseEstimatorBase):
             fps = cap.get(cv2.CAP_PROP_FPS) or 25
             w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            writer = cv2.VideoWriter(str(output_video_path), cv2.VideoWriter_fourcc(*self.cfg.pose_cfg.get("fourcc", "XVID")), fps, (w, h))
+            writer = cv2.VideoWriter(str(output_video_path), _video_writer_fourcc(output_video_path, self.cfg.pose_cfg.get("fourcc", "XVID")), fps, (w, h))
 
         frame_id = 0
         with tqdm(total=total, desc="YOLO Pose") as pbar:
@@ -1081,7 +1096,7 @@ class PosePipeline:
                                     loss_values = (loss_c + loss_f) * 0.5
                             for item, score_value in zip(pending_sparta_batch, loss_values.detach().cpu().numpy().reshape(-1)):
                                 score = float(score_value)
-                                pred = int(score >= sparta_threshold)
+                                pred = int(score > sparta_threshold)
                                 track_id = int(item["track_id"])
                                 latest_score_by_track[track_id] = score
                                 latest_anomaly_by_track[track_id] = pred

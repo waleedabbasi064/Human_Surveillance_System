@@ -1,10 +1,8 @@
 from huggingface_hub import HfApi
-import glob
-import os
+import glob, os
 
 api = HfApi()
 
-# Get username and setup repository ID
 username = api.whoami(token=os.environ["HF_TOKEN"])["name"]
 repo_id = f"{username}/pose-weights"
 token = os.environ["HF_TOKEN"]
@@ -16,42 +14,41 @@ try:
 except Exception as e:
     print(f"Warning: could not create or verify repo {repo_id}: {e}")
 
-# Define the root path of your project
-BASE_DIR = "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent"
+ALLOWED_EXTENSIONS = (".pt", ".pth", ".pth.tar")
 
-# 1. Explicitly list the exact files to upload from PoseEstimationModel
-explicit_files = [
-    os.path.join(BASE_DIR, "PoseEstimationModel/yolo26n.pt"),
-    os.path.join(BASE_DIR, "PoseEstimationModel/yolo26n-pose.pt"),
+patterns = [
+    "PoseEstimationModel/",
+    "Trained_Models/",
+    "results-sparta-c/",
+    "results-sparta-f/",
+    "mmpose/",
 ]
 
-# 2. Grab all files dynamically inside the Trained_Models/CHAD directory
-chad_dir_path = os.path.join(BASE_DIR, "Trained_Models/CHAD")
-chad_files = glob.glob(os.path.join(chad_dir_path, "*"))
+files = []
 
-# Combine both target sets into a single upload queue
-final_upload_list = explicit_files + chad_files
+# Collect all files recursively
+for p in patterns:
+    for ext in ALLOWED_EXTENSIONS:
+        files += glob.glob(os.path.join(p, f"**/*{ext}"), recursive=True)
 
-# Upload processing loop
-for local_path in sorted(set(final_upload_list)):
-    # Double check file exists locally before trying to upload
-    if not os.path.exists(local_path):
-        print(f"❌ File not found locally, skipping: {local_path}")
-        continue
+# ==================== ADD THIS UPLOAD LOGIC BELOW ====================
+
+if not files:
+    print("No weight files found matching the patterns and extensions.")
+else:
+    print(f"Found {len(files)} files to upload. Starting upload...")
     
-    if os.path.isdir(local_path):
-        continue # Skip directory references picked up by glob
-
-    # Calculate relative path from BASE_DIR to preserve clean folder structure on Hugging Face
-    repo_path = os.path.relpath(local_path, start=BASE_DIR)
-
-    print(f"Uploading: {repo_path}")
-
-    api.upload_file(
-        path_or_fileobj=local_path,
-        path_in_repo=repo_path,  # Saves exactly as PoseEstimationModel/... or Trained_Models/...
-        repo_id=repo_id,
-        token=token
-    )
-
-print("Done 🚀 Everything specified has been safely uploaded.")
+    for file_path in files:
+        print(f"Uploading: {file_path}...")
+        try:
+            api.upload_file(
+                path_or_fileobj=file_path,
+                path_in_repo=file_path,  # Keeps the same folder structure in HF
+                repo_id=repo_id,
+                token=token
+            )
+            print(f"Successfully uploaded: {file_path}")
+        except Exception as e:
+            print(f"Failed to upload {file_path}: {e}")
+            
+    print("All uploads completed!")

@@ -48,6 +48,7 @@ SPARTA_WEIGHTSETS = {
     for key, value in SPARTA_CFG.items()
     if isinstance(value, dict) and ("ctd" in value or "ftd" in value)
 }
+SUPPORTED_VIDEO_TYPES = ("mp4", "avi")
 
 
 def cfg_float(cfg: Dict, key: str, fallback: float | None = None) -> float | None:
@@ -99,6 +100,94 @@ def save_upload(upload) -> Path:
     with open(target, "wb") as f:
         f.write(upload.getbuffer())
     return target
+
+
+def browser_preview_video(video_path: Path) -> Path:
+    if video_path.suffix.lower() == ".mp4":
+        return video_path
+
+    preview_path = Path(tempfile.gettempdir()) / f"{video_path.stem}_preview.mp4"
+    if preview_path.exists() and preview_path.stat().st_mtime >= video_path.stat().st_mtime:
+        return preview_path
+
+    cap = cv2.VideoCapture(str(video_path))
+    if not cap.isOpened():
+        return video_path
+
+    fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    if width <= 0 or height <= 0:
+        cap.release()
+        return video_path
+
+    writer = cv2.VideoWriter(
+        str(preview_path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps,
+        (width, height),
+    )
+    if not writer.isOpened():
+        cap.release()
+        return video_path
+
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        writer.write(frame)
+
+    cap.release()
+    writer.release()
+    return preview_path if preview_path.exists() else video_path
+
+
+def overlay_fps(frame, fps: float, frame_id: int | None = None):
+    if frame is None:
+        return frame
+    label = f"FPS: {fps:.1f}"
+    if frame_id is not None:
+        label = f"{label} | Frame: {frame_id}"
+    cv2.putText(frame, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3, lineType=cv2.LINE_AA)
+    cv2.putText(frame, label, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, lineType=cv2.LINE_AA)
+    return frame
+
+
+def resize_frame_for_display(frame, max_width: int = 640):
+    if frame is None:
+        return None
+    height, width = frame.shape[:2]
+    if width <= 0 or height <= 0 or width <= max_width:
+        return frame
+    scale = max_width / float(width)
+    resized_height = max(1, int(round(height * scale)))
+    return cv2.resize(frame, (max_width, resized_height), interpolation=cv2.INTER_AREA)
+
+
+def open_display_capture(video_path: Path, source_mode: str) -> cv2.VideoCapture | None:
+    if source_mode == "Upload Video":
+        display_path = browser_preview_video(video_path)
+        cap = cv2.VideoCapture(str(display_path))
+        if cap.isOpened():
+            return cap
+        cap.release()
+
+    source_str = str(video_path)
+    if source_str.startswith("__camera__:"):
+        try:
+            camera_index = int(source_str.split(":", 1)[1])
+        except Exception:
+            camera_index = 0
+        cap = cv2.VideoCapture(camera_index)
+        if cap.isOpened():
+            return cap
+        cap.release()
+
+    cap = cv2.VideoCapture(str(video_path))
+    if cap.isOpened():
+        return cap
+    cap.release()
+    return None
 
 def camera_available(index: int = 0) -> bool:
     cap = cv2.VideoCapture(index)
@@ -192,6 +281,7 @@ def build_run_config(
     th_c: float | None,
     th_f: float | None,
     th_h: float | None,
+    capture_buffer_size: int | None,
 ) -> Dict:
     cfg = deepcopy(base_cfg)
     cfg["models"]["pose"]["name"] = pose_family
@@ -224,7 +314,19 @@ def build_run_config(
     cfg["paths"]["input_video"] = str(video_path)
     cfg["paths"]["static_prefix"] = "01_"
     cfg["paths"]["pose_json_suffix"] = ".json"
+    if capture_buffer_size is not None:
+        runtime_cfg = cfg.setdefault("runtime", {})
+        runtime_cfg["capture_buffer_size"] = int(capture_buffer_size)
     return cfg
+
+
+def score_csv_has_rows(scores_path: Path | None) -> bool:
+    if not scores_path or not scores_path.exists():
+        return False
+    try:
+        return len(pd.read_csv(scores_path)) > 0
+    except Exception:
+        return False
 
 
 def resolve_sparta_defaults(selected_weights: str) -> Tuple[str, str, float | None, float | None]:
@@ -454,6 +556,14 @@ def main():
         base_pose_variant = BASE_CFG["models"]["pose"].get("variant", pose_variant_options[0] if pose_variant_options else "")
         pose_variant_index = pose_variant_options.index(base_pose_variant) if base_pose_variant in pose_variant_options else 0
         pose_variant = st.selectbox("Pose Variant", pose_variant_options, index=pose_variant_index)
+        runtime_base = BASE_CFG.get("runtime", {}) or {}
+        capture_buffer_size = st.number_input(
+            "Capture Buffer Size",
+            min_value=1,
+            max_value=64,
+            value=int(runtime_base.get("capture_buffer_size", 2) or 2),
+            step=1,
+        )
 
         device = BASE_CFG["models"]["pose"].get("device", "cuda") or "cuda"
         save_video = False
@@ -508,8 +618,9 @@ def main():
             active_threshold = th_c
         st.caption(f"Active threshold: {active_threshold:.3f}")
     # --- MAIN: Title and Upload ---
-    st.title("🎥 Human-Centric Surveillance System")
-    st.caption("Real-time pose estimation with anomaly detection")
+    st.title("🎥 AI powered Human Surveillance application")
+    st.caption("Computer vision project detecting suspiciour activities in " \
+    "public spaces using high-precision pose estimation in real time")
     
     # Video Source Section
     local_camera_available = camera_available(0)
@@ -524,7 +635,7 @@ def main():
     source_stem = None
 
     if source_mode == "Upload Video":
-        upload = st.file_uploader("📹 Upload Video", type=["mp4", "avi", "mov"], label_visibility="collapsed")
+        upload = st.file_uploader("📹 Upload Video", type=list(SUPPORTED_VIDEO_TYPES), label_visibility="collapsed")
         if upload:
             video_path = save_upload(upload)
             video_source_label = str(video_path)
@@ -539,7 +650,7 @@ def main():
         # Start Analysis Button
         if st.button("🚀 Start Live Analysis", use_container_width=True, type="primary"):
             # 1. Setup Config
-            run_cfg = build_run_config(BASE_CFG, pose_family, pose_variant, det_family, det_variant, device, video_path, save_video, sparta_branch, ckpt_c, ckpt_f, th_c, th_f, th_h)
+            run_cfg = build_run_config(BASE_CFG, pose_family, pose_variant, det_family, det_variant, device, video_path, save_video, sparta_branch, ckpt_c, ckpt_f, th_c, th_f, th_h, capture_buffer_size)
             
             with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=POSE_DIR, delete=False) as tmp:
                 yaml.safe_dump(run_cfg, tmp)
@@ -547,78 +658,102 @@ def main():
 
             try:
                 st.divider()
-                
+
                 # --- VIDEO DISPLAY AREA ---
                 col_original, col_processed = st.columns(2, gap="small")
-                
+
                 with col_original:
                     st.markdown("#### Original video ")
-                    if source_mode == "Upload Video" and upload is not None:
-                        st.video(upload, start_time=0)
-                    else:
-                        st.info("Using live local camera stream.")
-                
+                    original_frame_placeholder = st.empty()
+
                 with col_processed:
-                    st.markdown("####  Model processing...")
+                    st.markdown("#### Model processing...")
                     frame_placeholder = st.empty()
-                
+
                 # --- PROGRESS AREA (Compact) ---
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                
+
                 pipeline = PosePipeline(tmp_path)
                 final_json_path = None
-                
+
                 try:
+                    original_cap = open_display_capture(video_path, source_mode)
+                    display_fps = 25.0
+                    display_width = 640
+                    if original_cap is not None and original_cap.isOpened():
+                        display_fps = original_cap.get(cv2.CAP_PROP_FPS) or display_fps
+                        source_width = int(original_cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+                        if source_width > 0:
+                            display_width = min(source_width, 640)
+
                     frame_count = 0
                     for frame, frame_id, total in pipeline.run_live():
-                        # Convert BGR to RGB
-                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        frame_placeholder.image(frame_rgb, channels="RGB")
-                        
+                        original_frame = None
+                        if original_cap is not None and original_cap.isOpened():
+                            ok, original_frame = original_cap.read()
+                            if not ok:
+                                original_frame = None
+
+                        if original_frame is not None:
+                            original_frame = resize_frame_for_display(original_frame, max_width=display_width)
+                            original_frame = overlay_fps(original_frame, display_fps, frame_id + 1)
+                            original_frame_rgb = cv2.cvtColor(original_frame, cv2.COLOR_BGR2RGB)
+                            original_frame_placeholder.image(original_frame_rgb, channels="RGB", use_container_width=True)
+
+                        processed_frame = overlay_fps(frame.copy(), display_fps, frame_id + 1)
+                        processed_frame = resize_frame_for_display(processed_frame, max_width=display_width)
+                        frame_rgb = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
+                        frame_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
+
                         frame_count += 1
                         if total > 0 and frame_count % 50 == 0:
                             progress_bar.progress(min((frame_id + 1) / total, 1.0))
-                    
+
                     progress_bar.progress(1.0)
                     status_text.success(f"✅ Processing Complete: {frame_count} frames processed")
-                    
+
                     final_json_path = pipeline.last_pose_json_path
-                
+
                 except Exception as e:
                     st.error(f"❌ Processing Error: {str(e)}")
                     status_text.error(f"Details: {traceback.format_exc()}")
+                finally:
+                    if 'original_cap' in locals() and original_cap is not None:
+                        original_cap.release()
 
                 # --- ANOMALY SCORING ---
                 st.divider()
                 st.subheader("⚡ Anomaly Scores")
-                
+
                 if final_json_path and final_json_path.exists():
-                    sparta_cfg = build_sparta_config(
-                        BASE_CFG,
-                        sparta_branch,
-                        ckpt_c,
-                        ckpt_f,
-                        th_c,
-                        th_f,
-                        th_h,
-                        final_json_path.parent,
-                        device,
-                        selected_sparta_weightset,
-                    )
-                    
-                    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=BASE_DIR, delete=False) as tmp_sparta:
-                        yaml.safe_dump(sparta_cfg, tmp_sparta)
-                        tmp_sparta_path = tmp_sparta.name
+                    scores_path = pipeline.last_scores_csv_path if score_csv_has_rows(pipeline.last_scores_csv_path) else None
+                    if scores_path is None:
+                        sparta_cfg = build_sparta_config(
+                            BASE_CFG,
+                            sparta_branch,
+                            ckpt_c,
+                            ckpt_f,
+                            th_c,
+                            th_f,
+                            th_h,
+                            final_json_path.parent,
+                            device,
+                            selected_sparta_weightset,
+                        )
 
-                    with st.spinner("Computing anomaly scores..."):
-                        subprocess.run(["python", "main.py", "--config", tmp_sparta_path], cwd=BASE_DIR, check=True)
+                        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", dir=BASE_DIR, delete=False) as tmp_sparta:
+                            yaml.safe_dump(sparta_cfg, tmp_sparta)
+                            tmp_sparta_path = tmp_sparta.name
 
-                    scores_dir = Path(sparta_cfg["save_results_dir"])
-                    scores_files = sorted(scores_dir.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
-                    
-                    if scores_files:
-                        scores_path = scores_files[0]
+                        with st.spinner("Computing anomaly scores..."):
+                            subprocess.run(["python", "main.py", "--config", tmp_sparta_path], cwd=BASE_DIR, check=True)
+
+                        scores_dir = Path(sparta_cfg["save_results_dir"])
+                        scores_files = sorted(scores_dir.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+                        scores_path = scores_files[0] if scores_files else None
+
+                    if scores_path:
                         df = pd.read_csv(scores_path)
                         threshold_line = active_threshold
                         st.pyplot(build_person_score_figure(df, threshold=threshold_line), use_container_width=True)
@@ -632,18 +767,17 @@ def main():
                                 mime="text/csv",
                                 use_container_width=True,
                             )
-
                 else:
                     st.warning("⚠️ Pose JSON not found; skipping anomaly scoring.")
-                    
+
             except Exception as e:
                 st.error(f"❌ Unexpected error: {str(e)}")
-                import traceback
                 st.error(f"Details: {traceback.format_exc()}")
             finally:
-                if 'tmp_path' in locals(): 
+                if 'tmp_path' in locals():
                     Path(tmp_path).unlink(missing_ok=True)
-                if 'tmp_sparta_path' in locals(): Path(tmp_sparta_path).unlink(missing_ok=True)
+                if 'tmp_sparta_path' in locals():
+                    Path(tmp_sparta_path).unlink(missing_ok=True)
 
 if __name__ == "__main__":
     main()

@@ -18,6 +18,12 @@ from utils.eval import eval
 import subprocess
 
 
+def _score_to_prediction(score, threshold):
+    if threshold is None:
+        return ""
+    return int(float(score) > float(threshold))
+
+
 def _ensure_remote_file(path: str | None) -> str | None:
     """If `path` does not exist locally, attempt to download it.
 
@@ -128,8 +134,7 @@ def _build_score_rows(scores, metadata=None, threshold=None):
             "score": float(score),
             "predicted": "",
         }
-        if threshold is not None:
-            row["predicted"] = int(float(score) > threshold)
+        row["predicted"] = _score_to_prediction(score, threshold)
 
         if idx < metadata_len:
             try:
