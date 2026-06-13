@@ -583,10 +583,7 @@ def main():
                     progress_bar.progress(1.0)
                     status_text.success(f"✅ Processing Complete: {frame_count} frames processed")
                     
-                    # Get JSON path
-                    res_prefix = run_cfg["paths"]["static_prefix"]
-                    expected_json_name = get_expected_name(source_stem or "camera0", res_prefix) + run_cfg["paths"]["pose_json_suffix"]
-                    final_json_path = Path(run_cfg["paths"]["pose_output_dir"]) / expected_json_name
+                    final_json_path = pipeline.last_pose_json_path
                 
                 except Exception as e:
                     st.error(f"❌ Processing Error: {str(e)}")

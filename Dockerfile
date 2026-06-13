@@ -3,6 +3,7 @@ FROM python:3.10-slim
 # Prevent Python from writing .pyc files and buffer stdout/stderr
 ENV PYTHONUNBUFFERED=1 \
     XDG_CACHE_HOME="/tmp/.cache" \
+    HF_WEIGHTS_REPO="shahzaib7788/pose-weights" \
     PORT=7860
 
 # Install system dependencies required for OpenCV, Mediapipe, and Video processing
@@ -28,6 +29,7 @@ RUN mkdir -p /app/PoseEstimationModel /app/Trained_Models/CHAD
 # This downloads your precise 3 files into PoseEstimationModel
 RUN python -c "from huggingface_hub import hf_hub_download; \
     hf_hub_download(repo_id='shahzaib7788/pose-weights', filename='PoseEstimationModel/yolo26n.pt', local_dir='/app'); \
+    hf_hub_download(repo_id='shahzaib7788/pose-weights', filename='PoseEstimationModel/yolo26n-pose.pt', local_dir='/app'); \
     hf_hub_download(repo_id='shahzaib7788/pose-weights', filename='PoseEstimationModel/td-hm_ViTPose-base_8xb64-210e_coco-256x192-216eae50_20230314.pth', local_dir='/app'); \
     hf_hub_download(repo_id='shahzaib7788/pose-weights', filename='PoseEstimationModel/td-hm_ViTPose-small_8xb64-210e_coco-256x192-62d7a712_20230314.pth', local_dir='/app')"
 
@@ -38,6 +40,8 @@ RUN python -c "from huggingface_hub import snapshot_download; \
 
 # Copy your code application files (Notice we DO NOT copy local model directories anymore)
 COPY --chown=user config /app/config
+COPY --chown=user PoseEstimationModel/pose_estimation.py /app/PoseEstimationModel/pose_estimation.py
+COPY --chown=user PoseEstimationModel/config.yaml /app/PoseEstimationModel/config.yaml
 COPY --chown=user utils /app/utils
 COPY --chown=user models.py /app/models.py
 COPY --chown=user main.py /app/main.py
@@ -47,9 +51,5 @@ COPY --chown=user streamlit_pose_app.py /app/streamlit_pose_app.py
 
 EXPOSE 7860
 
-# Direct execution array ensures environment flags pass cleanly and instantly
-CMD ["streamlit", "run", "streamlit_pose_app.py", \
-    "--server.address=0.0.0.0", \
-    "--server.port=7860", \
-    "--server.enableCORS=false", \
-    "--server.enableXsrfProtection=false"]
+# Use the platform-provided PORT when present; Hugging Face checks README app_port.
+CMD ["sh", "-c", "streamlit run streamlit_pose_app.py --server.address=0.0.0.0 --server.port=${PORT:-7860} --server.headless=true --server.enableCORS=false --server.enableXsrfProtection=false --browser.gatherUsageStats=false"]

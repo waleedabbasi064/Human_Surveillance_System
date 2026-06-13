@@ -2,25 +2,25 @@
 # Edit this file, then run: python main.py
 
 dataset: corridor
-branch: SPARTA_F # SPARTA_C | SPARTA_F | SPARTA_H
+branch: SPARTA_H # SPARTA_C | SPARTA_F | SPARTA_H
 mode: test # train | test
 
-device: cuda:0
+device: cpu
 seed: 999
 
 # Custom paths (outside ./data)
 data_dir: .
-vid_path_train: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/videos/surveillance video.mp4
+vid_path_train: null
 pose_path_train: null
 pose_path_train_abnormal: null
 vid_path_test: null
-pose_path_test: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/pose_outputs/01_0000.json
+pose_path_test: pose_outputs/01_0000.json
 mask_root: null
 
 model_save_dir: results/sparta-f
-model_ckpt_dir: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/FTD.pth.tar # required in test mode (non-H)
-model_ckpt_C: null # required in test mode for SPARTA_H
-model_ckpt_F: null # required in test mode for SPARTA_H
+model_ckpt_dir: null # required in test mode (non-H)
+model_ckpt_C: Trained_Models/CHAD/CTD.pth.tar # required in test mode for SPARTA_H
+model_ckpt_F: Trained_Models/CHAD/FTD.pth.tar # required in test mode for SPARTA_H
 
 seg_len: 24
 seg_stride: 12
@@ -48,9 +48,9 @@ eval_interval: 0
 disable_eval_during_train: false
 skip_final_eval: false
 save_results: true
-save_results_dir: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/pose_outputs
+save_results_dir: evaluation_results_sparta
 plot_results: true
-plot_results_dir: /home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/pose_outputs/evaluation_plots_sparta-f
+plot_results_dir: evaluation_results_sparta/plots
 metrics_csv: metrics.csv
 model_num_heads: 2
 model_latent_dim: 64

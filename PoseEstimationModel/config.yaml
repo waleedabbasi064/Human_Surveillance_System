@@ -4,11 +4,11 @@ models:
         variant: "n"
         confidence_threshold: 0.30
         iou_threshold: 0.45
-        device: "cuda" # change to "cuda" if needed
+        device: "cpu" # change to "cuda" if needed
         classes:
         weights:
             yolo:
-                n: "yolov26n.pt"
+                n: "yolo26n.pt"
                 s: "yolo26s.pt"
                 m: "yolov26m.pt"
                 l: "yolov26l.pt"
@@ -35,36 +35,36 @@ models:
         # ACTIVE CHECKPOINTS
         # Set these to whichever dataset you want to use right now.
         IITB:
-            ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/results-sparta-c/checkpoint_best.pth.tar"
-            ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/results-sparta-f/checkpoint_best.pth.tar"
+            ctd: "results-sparta-c/checkpoint_best.pth.tar"
+            ftd: "results-sparta-f/checkpoint_best.pth.tar"
             eer_threshold_c: 0.03000000000000001
             eer_threshold_f: 0.0644547895546187
 
         CHAD:
-            ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/CTD.pth.tar"
-            ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/CHAD/FTD.pth.tar"
+            ctd: "Trained_Models/CHAD/CTD.pth.tar"
+            ftd: "Trained_Models/CHAD/FTD.pth.tar"
             eer_threshold_c: 0.25
             eer_threshold_f: 0.40
 
         NWPUC:
-            ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/NWPUC/CTD.pth.tar"
-            ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/NWPUC/FTD.pth.tar"
+            ctd: "Trained_Models/NWPUC/CTD.pth.tar"
+            ftd: "Trained_Models/NWPUC/FTD.pth.tar"
             eer_threshold_c: 0.03000000000000001
             eer_threshold_f: 0.0644547895546187
 
         SHT:
-            ctd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/SHT/CTD.pth.tar"
-            ftd: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/Trained_Models/SHT/FTD.pth.tar"
+            ctd: "Trained_Models/SHT/CTD.pth.tar"
+            ftd: "Trained_Models/SHT/FTD.pth.tar"
             eer_threshold_c: 0.03000000000000001
             eer_threshold_f: 0.0644547895546187
 
     pose:
-        name: "vitpose"
-        variant: "small"
+        name: "yolo-pose"
+        variant: "n"
         confidence_threshold: 0.25
         iou_threshold: 0.45
         min_keypoint_confidence: 0.30
-        device: "cuda" # change to "cuda" if needed
+        device: "cpu" # change to "cuda" if needed
         fourcc: "XVID"
         save_video: true
         weights:
@@ -101,15 +101,15 @@ models:
 
 paths:
     input_video: "../videos/surveillance video.mp4"
-    pose_output_dir: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/pose_outputs"
-    sparta_output_dir: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/evaluation_results_sparta"
+    pose_output_dir: "../pose_outputs"
+    sparta_output_dir: "../evaluation_results_sparta"
     static_prefix: "01_"
     pose_json_suffix: ".json"
 
 inference:
     no_metrics: save
     save_results: save
-    save_results_dir: "/home/waleed64/Documents/Human_Centric_Anomaly_Detection_Agent/evaluation_results_sparta"
+    save_results_dir: "../evaluation_results_sparta"
 
 runtime:
     resize_width: 640

@@ -4,7 +4,7 @@ emoji: 🛡️
 colorFrom: blue
 colorTo: red
 sdk: docker
-app_port: 8501
+app_port: 7860
 ---
 
 # Human-Centric Video Anomaly Detection
