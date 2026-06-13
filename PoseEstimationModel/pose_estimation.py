@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import colorsys
+import inspect
 import os
 from argparse import Namespace
 from collections import defaultdict
@@ -99,6 +100,13 @@ def _open_video_capture(source: Any) -> cv2.VideoCapture:
         return cap
     cap.release()
     return cv2.VideoCapture(source_str)
+
+
+def _init_byte_tracker(tracker_args: Namespace, frame_rate: float) -> BYTETracker:
+    init_signature = inspect.signature(BYTETracker.__init__)
+    if "frame_rate" in init_signature.parameters:
+        return BYTETracker(tracker_args, frame_rate=frame_rate)
+    return BYTETracker(tracker_args)
 
 
 def _video_writer_fourcc(output_video_path: Path, configured_fourcc: str) -> int:
@@ -373,7 +381,7 @@ class PersonDetector:
         cap.set(cv2.CAP_PROP_BUFFERSIZE, int(self.cfg.runtime_cfg.get("capture_buffer_size", 2)))
         if not cap.isOpened(): raise RuntimeError(f"Cannot open: {video_path}")
 
-        tracker = BYTETracker(self.bt_args, frame_rate=cap.get(cv2.CAP_PROP_FPS))
+        tracker = _init_byte_tracker(self.bt_args, float(cap.get(cv2.CAP_PROP_FPS) or 0.0))
         records = []
         frame_id = 0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -770,7 +778,7 @@ class PosePipeline:
         
         # Initialize detector, tracker, and pose estimator once
         detector = PersonDetector(self.config)
-        tracker = BYTETracker(detector.bt_args, frame_rate=fps)
+        tracker = _init_byte_tracker(detector.bt_args, float(fps))
         
         pose_paths = self.config.pose_paths()
         pose_name = self.config.pose_cfg.get("name", "").lower()
