@@ -9,8 +9,9 @@ app_port: 7860
 
 # Human-Centric Video Anomaly Detection
 
-This repository contains an updated SPARTA pipeline for pose-based anomaly detection on surveillance videos using Streamlit. It builds on the original SPARTA architecture from TeCSAR-UNCC/SPARTA, utilizing a multi-person inference paradigm.
-This repository contains an updated SPARTA pipeline for pose-based anomaly detection on surveillance videos. It builds on the original SPARTA architecture from [TeCSAR-UNCC/SPARTA](https://github.com/TeCSAR-UNCC/SPARTA), which trains the shared encoder plus the twin decoders (CTD/FTD) on multiple datasets; this fork focuses on streamlined multi-person inference and tooling.
+Live demo: https://huggingface.co/spaces/shahzaib778899/human-centric-anomaly-detection
+
+This project delivers a next-generation, privacy-first computer vision platform designed to transform traditional reactive monitoring into proactive, automated surveillance. By leveraging advanced skeletal pose estimation and trajectory analysis, the system identifies and tracks human movement in real-time without processing sensitive personal identifiers like faces or pixel-based imagery. The architecture is engineered for resilience, remaining immune to common visual challenges such as shadows, low-light conditions, or background noise, making it highly effective for diverse indoor and outdoor deployments. Furthermore, the system integrates contextual intelligence to evaluate behaviors relative to their specific environment—such as distinguishing between standard athletic activity and potential threats in restricted areas—significantly reducing false positives. By learning the patterns of "normal" behavior, the model is capable of flagging novel, unseen threats, providing a scalable and mission-critical security solution for high-security facilities like airports, transit hubs, and educational campuses.
 
 It includes:
 
@@ -152,7 +153,7 @@ The pipeline was trained and evaluated on the IITB-Corridor Dataset. The SPARTA 
 Put your Google Drive or external download links here:
 
 - `Detection + pose model weights`: Download it from its official github repo
-- `SPARTA checkpoint weights`: `https://drive.google.com/drive/folders/18cSRaZDx2tOw98gexUdBHAaFJLAh8hwV?usp=sharing`
+- `SPARTA checkpoint weights`: `https://huggingface.co/shahzaib778899/pose-weights/tree/main`
 
 > Note: Do not commit these large weight files to GitHub. Keep only code and configuration in the repo.
 
