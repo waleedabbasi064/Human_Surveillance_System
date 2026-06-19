@@ -1,5 +1,5 @@
 ---
-title: Human Centric Anomaly Detection Agent
+title: Human Centric Surveillance System/Anomaly Detection Using YOLOv26 and Pose Estimation 
 emoji: 🛡️
 colorFrom: blue
 colorTo: red
