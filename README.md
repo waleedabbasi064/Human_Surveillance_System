@@ -9,7 +9,7 @@ app_port: 7860
 
 # Human-Centric Surveillance System/Anomaly Detection Using YOLOv26 and Pose Estimation
 
-Live demo: https://huggingface.co/spaces/shahzaib778899/human-centric-anomaly-detection
+Live demo: https://shorturl.at/qnDiB
 
 This project delivers a next-generation, privacy-first computer vision platform designed to transform traditional reactive monitoring into proactive, automated surveillance. By leveraging advanced skeletal pose estimation and trajectory analysis, the system identifies and tracks human movement in real-time without processing sensitive personal identifiers like faces or pixel-based imagery. The architecture is engineered for resilience, remaining immune to common visual challenges such as shadows, low-light conditions, or background noise, making it highly effective for diverse indoor and outdoor deployments. Furthermore, the system integrates contextual intelligence to evaluate behaviors relative to their specific environment—such as distinguishing between standard athletic activity and potential threats in restricted areas—significantly reducing false positives. By learning the patterns of "normal" behavior, the model is capable of flagging novel, unseen threats, providing a scalable and mission-critical security solution for high-security facilities like airports, transit hubs, and educational campuses.
 
