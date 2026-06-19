@@ -7,7 +7,7 @@ sdk: docker
 app_port: 7860
 ---
 
-# Human-Centric Video Anomaly Detection
+# Human-Centric Surveillance System/Anomaly Detection Using YOLOv26 and Pose Estimation
 
 Live demo: https://huggingface.co/spaces/shahzaib778899/human-centric-anomaly-detection
 
